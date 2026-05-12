@@ -1,0 +1,142 @@
+# ===========================
+# Project: Document Classifier
+# Week 6 Group Project
+# ===========================
+
+# ---------------------------------
+# 1. Environment & Secrets
+# ---------------------------------
+.env                          # actual credentials (keep .env.example)
+*.env                         # any other env files
+!.env.example                 # allow the example file
+
+# ---------------------------------
+# 2. Python bytecode & cache
+# ---------------------------------
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# ---------------------------------
+# 3. Virtual environments
+# ---------------------------------
+venv/
+env/
+.venv/
+.venv*/
+virtualenv/
+
+# ---------------------------------
+# 4. Distribution / packaging
+# ---------------------------------
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# ---------------------------------
+# 5. IDE & editor files
+# ---------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---------------------------------
+# 6. Python testing & coverage
+# ---------------------------------
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+
+# ---------------------------------
+# 7. Type checking & linting
+# ---------------------------------
+.mypy_cache/
+.ruff_cache/
+.pylint.d/
+
+# ---------------------------------
+# 8. Jupyter notebooks (if any)
+# ---------------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# ---------------------------------
+# 9. Logs & temporary files
+# ---------------------------------
+*.log
+logs/
+*.tmp
+*.temp
+
+# ---------------------------------
+# 10. Database files (local SQLite, etc.)
+# ---------------------------------
+*.db
+*.sqlite3
+*.sqlite
+
+# ---------------------------------
+# 11. Docker / Compose volumes & data
+# ---------------------------------
+data/
+minio_data/
+postgres_data/
+redis_data/
+vault_data/
+uploads/
+overlays/                # generated overlays from worker (they go to MinIO)
+
+# ---------------------------------
+# 12. Model & dataset artifacts
+# ---------------------------------
+# Ignore all model weight files by default.
+# The trained classifier.pt is tracked via Git LFS, so we must allow it.
+*.pt
+*.pth
+*.bin
+# But allow the specific trained model
+!app/classifier/models/classifier.pt
+
+# Ignore dataset archives (RVL-CDIP) – never commit the 37 GB dataset
+*.tar.gz
+*.tgz
+*.zip
+*.tar
+rvl-cdip/
+RVL-CDIP/
+dataset/
+images/
+train/
+val/
+test/
+
+# ---------------------------------
+# 13. Redis dump files
+# ---------------------------------
+dump.rdb
+
+# ---------------------------------
+# 14. Vault local tokens / data
+# ---------------------------------
+vault_token
+vault-config/
+*.vault
+
+# ---------------------------------
+# 15. Miscellaneous
+# ---------------------------------
+*.orig          # merge conflict remnants
+*.bak
+*.patch
