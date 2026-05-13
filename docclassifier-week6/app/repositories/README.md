@@ -36,17 +36,56 @@ async def list_batches(batch_repo: BatchRepo = Depends()):
 
 ## The Rules for Repositories
 
-Repositories must follow three strict rules:
+Repositories must follow strict rules:
 
-1. **No HTTP errors** — repositories never raise `HTTPException` or anything from FastAPI. They raise plain Python exceptions like `ValueError` or `KeyError`. The service layer decides what to do with those.
+1. **Accept domain models as input** — accept `UserCreate`, `PredictionCreate`, `BatchCreate`, etc. from `app/domain/`. Never raw parameters.
 
-2. **No cache invalidation** — repositories never touch Redis. If a write should invalidate a cache entry, that logic lives in the service layer.
+2. **Always return domain models** — return Pydantic models (`User`, `Batch`, `Prediction`), never ORM objects. Convert using `.model_validate(orm_obj)`.
 
-3. **Only import from `app/db/models.py`** — repositories work with SQLAlchemy ORM objects and return domain models. They do not return raw SQL rows.
+3. **No HTTP errors** — repositories never raise `HTTPException` or anything from FastAPI. They raise plain Python exceptions like `ValueError` or `KeyError`. The service layer decides what to do with those.
+
+4. **No cache invalidation** — repositories never touch Redis. If a write should invalidate a cache entry, that logic lives in the service layer.
+
+5. **Import from both layers**:
+   - Import ORM models from `app/db/models.py` (for database operations)
+   - Import domain models from `app/domain/*.py` (for return types and input validation)
+
+---
+
+## ORM ↔ Domain Model Pattern
+
+Every repository follows this pattern:
+
+```python
+# Import BOTH the ORM model and domain model
+from app.db.models import User as UserORM  # ORM layer (database)
+from app.domain.user import User, UserCreate  # Domain layer (API/service)
+
+class UserRepo:
+    async def create(self, user_create: UserCreate) -> User:
+        # 1. Accept domain model as input
+        # 2. Create ORM object from domain data
+        user_orm = UserORM(
+            email=user_create.email,
+            role=user_create.role,
+        )
+        # 3. Commit to database
+        self.session.add(user_orm)
+        await self.session.commit()
+        
+        # 4. Convert ORM result back to domain model before returning
+        return User.model_validate(user_orm)
+```
+
+This pattern ensures:
+- Clean separation of concerns between database schema and API contract
+- Type safety from input to output
+- Your teammates can see what type of data each function accepts and returns
 
 ---
 
 ## Files in This Directory
+
 
 ```
 app/repositories/
