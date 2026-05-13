@@ -3,10 +3,15 @@
 # Handles persisting new predictions from the inference worker,
 # listing/recent predictions, and relabeling (with reviewer permissions
 # and the confidence < 0.7 rule).
+#
+# Note: relabel does NOT overwrite predicted_class.  The model's original
+# prediction is kept; the reviewer's correction goes into relabeled_class.
+# This preserves the history needed for retraining and auditing.
 
-from uuid import UUID
-from app.domain.prediction import Prediction
-from app.domain.user import User
+from datetime import datetime, timezone
+
+from app.domain.prediction import Prediction, PredictionCreate, PredictionRelabel
+from app.domain.user import User, Role
 
 
 class PredictionService:
@@ -15,74 +20,60 @@ class PredictionService:
     """
 
     def __init__(self, prediction_repo, audit_repo, cache):
-        """
-        Inject dependencies.
-        :param prediction_repo: PredictionRepository instance
-        :param audit_repo: AuditRepository instance
-        :param cache: CacheInvalidator instance
-        """
         self.prediction_repo = prediction_repo
         self.audit_repo = audit_repo
         self.cache = cache
 
-    async def save_prediction(
-        self,
-        batch_id: UUID,
-        filename: str,
-        blob_key: str,
-        overlay_key: str,
-        predicted_class: int,
-        confidence: float,
-    ) -> Prediction:
+    async def save_prediction(self, data: PredictionCreate) -> Prediction:
         """
         Persist a new prediction record.
         Called by the inference worker after classifying an image.
-        :return: newly created Prediction domain model
         """
-        # Phase 1 stub - returns a dummy prediction
+        # Phase 1 stub
         return Prediction(
-            id=UUID("20000000-0000-0000-0000-000000000000"),
-            batch_id=batch_id,
-            filename=filename,
-            blob_key=blob_key,
-            overlay_key=overlay_key,
-            predicted_class=predicted_class,
-            confidence=confidence,
-            is_reviewed=False,
+            id="20000000-0000-0000-0000-000000000000",
+            batch_id=data.batch_id,
+            filename=data.filename,
+            blob_key=data.blob_key,
+            overlay_key=data.overlay_key,
+            predicted_class=data.predicted_class,
+            confidence=data.confidence,
+            relabeled_class=None,
+            created_at=datetime.now(timezone.utc),
         )
 
-    async def get_by_id(self, prediction_id: UUID) -> Prediction:
+    async def get_by_id(self, prediction_id: str) -> Prediction:
         """
         Retrieve a single prediction by id.
         :raises NotFound: if no prediction with this id exists
         """
-        # Phase 1 stub
         return Prediction(
             id=prediction_id,
-            batch_id=UUID("10000000-0000-0000-0000-000000000000"),
+            batch_id="10000000-0000-0000-0000-000000000000",
             filename="doc1.tiff",
-            blob_key="uploads/batch1/doc1.tiff",
-            overlay_key="overlays/batch1/doc1.png",
-            predicted_class=3,
+            blob_key="minio://documents/batches/b1/original/doc1.tiff",
+            overlay_key="minio://documents/batches/b1/overlay/doc1.png",
+            predicted_class="invoice",
             confidence=0.85,
-            is_reviewed=False,
+            relabeled_class=None,
+            created_at=datetime.now(timezone.utc),
         )
 
-    async def get_predictions_for_batch(self, batch_id: UUID) -> list[Prediction]:
+    async def get_predictions_for_batch(self, batch_id: str) -> list[Prediction]:
         """
         Return all predictions belonging to a specific batch.
         """
-        # Phase 1 stub - returns one dummy prediction for the given batch
         return [
             Prediction(
-                id=UUID("20000000-0000-0000-0000-000000000001"),
+                id="20000000-0000-0000-0000-000000000001",
                 batch_id=batch_id,
                 filename="doc1.tiff",
-                blob_key="uploads/batch1/doc1.tiff",
-                overlay_key="overlays/batch1/doc1.png",
-                predicted_class=3,
+                blob_key="minio://documents/batches/b1/original/doc1.tiff",
+                overlay_key="minio://documents/batches/b1/overlay/doc1.png",
+                predicted_class="handwritten",
                 confidence=0.95,
-                is_reviewed=False,
+                relabeled_class=None,
+                created_at=datetime.now(timezone.utc),
             )
         ]
 
@@ -91,52 +82,61 @@ class PredictionService:
         Return the most recent predictions across all batches.
         Phase 2: prediction_repo.list_recent(limit).
         """
-        # Phase 1 stub - returns an independent list, NOT delegated to get_predictions_for_batch
+        # Independent list - NOT delegated to get_predictions_for_batch
+        now = datetime.now(timezone.utc)
         return [
             Prediction(
-                id=UUID("20000000-0000-0000-0000-000000000010"),
-                batch_id=UUID("10000000-0000-0000-0000-000000000001"),
+                id="20000000-0000-0000-0000-000000000010",
+                batch_id="10000000-0000-0000-0000-000000000001",
                 filename="recent1.tiff",
-                blob_key="uploads/recent/recent1.tiff",
-                overlay_key="overlays/recent/recent1.png",
-                predicted_class=11,  # invoice
+                blob_key="minio://documents/batches/b2/original/recent1.tiff",
+                overlay_key="minio://documents/batches/b2/overlay/recent1.png",
+                predicted_class="invoice",
                 confidence=0.92,
-                is_reviewed=False,
+                relabeled_class=None,
+                created_at=now,
             ),
             Prediction(
-                id=UUID("20000000-0000-0000-0000-000000000011"),
-                batch_id=UUID("10000000-0000-0000-0000-000000000002"),
+                id="20000000-0000-0000-0000-000000000011",
+                batch_id="10000000-0000-0000-0000-000000000002",
                 filename="recent2.tiff",
-                blob_key="uploads/recent/recent2.tiff",
-                overlay_key="overlays/recent/recent2.png",
-                predicted_class=14,  # resume
+                blob_key="minio://documents/batches/b3/original/recent2.tiff",
+                overlay_key="minio://documents/batches/b3/overlay/recent2.png",
+                predicted_class="resume",
                 confidence=0.58,
-                is_reviewed=False,
+                relabeled_class=None,
+                created_at=now,
             ),
         ][:limit]
 
     async def relabel(
         self,
-        prediction_id: UUID,
-        new_class: int,
+        prediction_id: str,
+        update: PredictionRelabel,
         actor: User,
     ) -> Prediction:
         """
-        Change the class label of a prediction.
-        Only reviewers and admins may relabel.
-        Reviewers can only relabel predictions with confidence < 0.7.
+        Set the reviewer's corrected class for a prediction.
+        Phase 2 will:
+          1. Check actor.role is reviewer or admin
+          2. Fetch the prediction (NotFound if missing)
+          3. If actor is reviewer, require pred.confidence < 0.7
+          4. Call prediction_repo.relabel(prediction_id, update.relabeled_class, actor.id)
+          5. Invalidate predictions:recent and the parent batch cache
+          6. Audit log: action="relabel", detail={"from": predicted_class, "to": relabeled_class}
         :raises PermissionDenied: if actor is not reviewer or admin
         :raises RelabelNotAllowed: if reviewer tries to relabel a high-confidence prediction
         :raises NotFound: if prediction_id does not exist
         """
-        # Phase 1 stub - returns a prediction with the new label
+        # Phase 1 stub - leaves predicted_class intact and sets relabeled_class
         return Prediction(
             id=prediction_id,
-            batch_id=UUID("10000000-0000-0000-0000-000000000000"),
+            batch_id="10000000-0000-0000-0000-000000000000",
             filename="doc1.tiff",
-            blob_key="uploads/batch1/doc1.tiff",
-            overlay_key="overlays/batch1/doc1.png",
-            predicted_class=new_class,
+            blob_key="minio://documents/batches/b1/original/doc1.tiff",
+            overlay_key="minio://documents/batches/b1/overlay/doc1.png",
+            predicted_class="invoice",                # original model output, untouched
             confidence=0.65,
-            is_reviewed=True,
+            relabeled_class=update.relabeled_class,   # reviewer's correction
+            created_at=datetime.now(timezone.utc),
         )

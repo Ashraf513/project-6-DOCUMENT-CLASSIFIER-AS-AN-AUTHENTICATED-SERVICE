@@ -1,14 +1,42 @@
-# Location: app/domain/user.py
-# Purpose: Pydantic schema for User representation (output of service layer)
+"""
+Domain model for a user.
 
-from pydantic import BaseModel
-from uuid import UUID
+fastapi-users manages authentication internals (hashed password, JWT).
+This domain model is what the rest of the application sees — a clean
+object with role and status, no auth implementation details.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+
+from pydantic import BaseModel, EmailStr
+
+
+class Role(str, Enum):
+    admin    = "admin"     # invite users, toggle roles, view audit log
+    reviewer = "reviewer"  # view batches, relabel predictions with confidence < 0.7
+    auditor  = "auditor"   # read-only on batches and audit log
+
 
 class User(BaseModel):
-    id: UUID
-    email: str
-    role: str          # "admin", "reviewer", "auditor"
-    is_active: bool
+    id:         str
+    email:      EmailStr
+    role:       Role
+    is_active:  bool
+    created_at: datetime
 
-    class Config:
-        from_attributes = True   # enables .from_orm() / model_validate with ORM objects
+    model_config = {"from_attributes": True}
+
+
+class UserCreate(BaseModel):
+    """Input shape for user registration."""
+    email:    EmailStr
+    password: str
+    role:     Role = Role.auditor   # new users default to least-privileged role
+
+
+class UserRoleUpdate(BaseModel):
+    """Input shape for the admin role-toggle endpoint."""
+    role: Role

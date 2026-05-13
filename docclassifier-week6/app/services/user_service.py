@@ -4,8 +4,9 @@
 # and permissions (e.g., only admins can change roles, last admin cannot be demoted).
 # It depends on UserRepository, AuditRepository, and a cache invalidator.
 
-from uuid import UUID
-from app.domain.user import User
+from datetime import datetime, timezone
+
+from app.domain.user import User, Role, UserCreate, UserRoleUpdate
 
 
 class UserService:
@@ -16,7 +17,6 @@ class UserService:
 
     def __init__(self, user_repo, audit_repo, cache):
         """
-        Inject dependencies.
         :param user_repo: UserRepository instance (data access)
         :param audit_repo: AuditRepository instance (audit log)
         :param cache: CacheInvalidator instance (cache key deletion)
@@ -25,69 +25,57 @@ class UserService:
         self.audit_repo = audit_repo
         self.cache = cache
 
-    async def get_me(self, user_id: UUID) -> User:
+    async def get_me(self, user_id: str) -> User:
         """
         Retrieve the profile of the currently authenticated user.
-        :param user_id: UUID of the user
-        :return: User domain model
         :raises NotFound: if no user with this id exists
         """
-        # Phase 1 stub - returns a dummy user; to be replaced with real DB lookup
+        # Phase 1 stub
         return User(
             id=user_id,
             email="user@example.com",
-            role="auditor",
+            role=Role.auditor,
             is_active=True,
+            created_at=datetime.now(timezone.utc),
         )
 
-    async def get_by_id(self, user_id: UUID) -> User:
+    async def get_by_id(self, user_id: str) -> User:
         """
         Retrieve a user by id. Used by Casbin enforcement and admin views.
-        :param user_id: UUID of the user
-        :return: User domain model
         :raises NotFound: if no user with this id exists
         """
-        # Phase 1 stub - returns a dummy reviewer
+        # Phase 1 stub
         return User(
             id=user_id,
             email="someone@example.com",
-            role="reviewer",
+            role=Role.reviewer,
             is_active=True,
+            created_at=datetime.now(timezone.utc),
         )
 
-    async def create_user(
-        self,
-        email: str,
-        password: str,
-        role: str,
-        actor: User,
-    ) -> User:
+    async def create_user(self, data: UserCreate, actor: User) -> User:
         """
         Create a new user. Admin-only.
         Phase 2 will:
-          1. Check actor.role == "admin"
-          2. Hash the password (passlib / fastapi-users PasswordHelper)
+          1. Check actor.role == Role.admin
+          2. Hash data.password (passlib / fastapi-users PasswordHelper)
           3. Insert via user_repo
           4. Write audit log
-        :param email: new user's email
-        :param password: plain text password (will be hashed in Phase 2)
-        :param role: "admin", "reviewer", or "auditor"
-        :param actor: the user performing the creation (must be admin)
-        :return: newly created User domain model
         :raises PermissionDenied: if actor is not an admin
         """
-        # Phase 1 stub - returns a dummy user with the requested role
+        # Phase 1 stub - returns a dummy user reflecting the input
         return User(
-            id=UUID("00000000-0000-0000-0000-000000000099"),
-            email=email,
-            role=role,
+            id="00000000-0000-0000-0000-000000000099",
+            email=data.email,
+            role=data.role,
             is_active=True,
+            created_at=datetime.now(timezone.utc),
         )
 
     async def change_role(
         self,
-        target_user_id: UUID,
-        new_role: str,
+        target_user_id: str,
+        update: UserRoleUpdate,
         actor: User,
     ) -> User:
         """
@@ -95,20 +83,17 @@ class UserService:
         Only admins can perform this action.
         If the target is the last admin and the change would revoke that role,
         the operation is blocked.
-        :param target_user_id: UUID of the user whose role will be changed
-        :param new_role: desired new role ("admin", "reviewer", "auditor")
-        :param actor: the user performing the change (must be admin)
-        :return: updated User domain model
         :raises PermissionDenied: if actor is not admin
         :raises LastAdminError: if this would demote the last admin
         :raises NotFound: if target_user_id does not exist
         """
-        # Phase 1 stub - just returns an updated-looking user
+        # Phase 1 stub
         return User(
             id=target_user_id,
             email="changed@example.com",
-            role=new_role,
+            role=update.role,
             is_active=True,
+            created_at=datetime.now(timezone.utc),
         )
 
     async def list_users(
@@ -119,24 +104,23 @@ class UserService:
     ) -> list[User]:
         """
         List users (admin only).
-        :param actor: the requesting user (must be admin)
-        :param skip: pagination offset
-        :param limit: maximum number of items to return
-        :return: list of User domain models
         :raises PermissionDenied: if actor is not admin
         """
-        # Phase 1 stub - returns two dummy users
+        # Phase 1 stub
+        now = datetime.now(timezone.utc)
         return [
             User(
-                id=UUID("00000000-0000-0000-0000-000000000001"),
+                id="00000000-0000-0000-0000-000000000001",
                 email="admin@example.com",
-                role="admin",
+                role=Role.admin,
                 is_active=True,
+                created_at=now,
             ),
             User(
-                id=UUID("00000000-0000-0000-0000-000000000002"),
+                id="00000000-0000-0000-0000-000000000002",
                 email="reviewer@example.com",
-                role="reviewer",
+                role=Role.reviewer,
                 is_active=True,
+                created_at=now,
             ),
         ]
