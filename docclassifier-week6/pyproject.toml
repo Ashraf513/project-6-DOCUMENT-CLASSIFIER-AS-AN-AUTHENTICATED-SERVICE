@@ -5,6 +5,12 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic[email]>=2",
+    "sqlalchemy>=2.0.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
 ]
 
 [dependency-groups]
