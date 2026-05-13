@@ -1,76 +1,73 @@
 # Location: app/services/user_service.py
-# Main purpose: Business logic for user management.
-# This service owns all rules about user creation, role changes,
-# and permissions (e.g., only admins can change roles, last admin cannot be demoted).
-# It depends on UserRepository, AuditRepository, and a cache invalidator.
+# Business logic: user creation, role changes, profile.
+# All methods are async. They own transaction boundaries and cache invalidation.
 
-from datetime import datetime, timezone
-
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.user import User, Role, UserCreate, UserRoleUpdate
+from app.repositories.user_repo import UserRepo
+from app.repositories.audit_repo import AuditRepo
+from app.infra.cache import (
+    CacheInvalidator,
+    USERS_LIST_KEY,
+    user_me_key,
+)
+from app.infra.security import hash_password
+from app.services.exceptions import (
+    PermissionDenied,
+    NotFound,
+    LastAdminError,
+)
 
 
 class UserService:
     """
-    User business logic - creation, role management, profile retrieval.
-    All methods are async because they will eventually talk to async repos and cache.
+    Handles user‑related business logic.
+    - Only admins can create / change roles.
+    - The last admin cannot be demoted.
+    - Role changes are audited and cached data is invalidated.
     """
 
-    def __init__(self, user_repo, audit_repo, cache):
-        """
-        :param user_repo: UserRepository instance (data access)
-        :param audit_repo: AuditRepository instance (audit log)
-        :param cache: CacheInvalidator instance (cache key deletion)
-        """
-        self.user_repo = user_repo
-        self.audit_repo = audit_repo
+    def __init__(self, db: AsyncSession, cache: CacheInvalidator):
+        self.db = db
         self.cache = cache
+        self.user_repo = UserRepo(db)
+        self.audit_repo = AuditRepo(db)
 
     async def get_me(self, user_id: str) -> User:
-        """
-        Retrieve the profile of the currently authenticated user.
-        :raises NotFound: if no user with this id exists
-        """
-        # Phase 1 stub
-        return User(
-            id=user_id,
-            email="user@example.com",
-            role=Role.auditor,
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
-        )
+        async with self.db.begin():
+            user = await self.user_repo.get_by_id(user_id)
+            if not user:
+                raise NotFound("User not found")
+            return user
 
     async def get_by_id(self, user_id: str) -> User:
-        """
-        Retrieve a user by id. Used by Casbin enforcement and admin views.
-        :raises NotFound: if no user with this id exists
-        """
-        # Phase 1 stub
-        return User(
-            id=user_id,
-            email="someone@example.com",
-            role=Role.reviewer,
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
-        )
+        return await self.get_me(user_id)
 
     async def create_user(self, data: UserCreate, actor: User) -> User:
         """
-        Create a new user. Admin-only.
-        Phase 2 will:
-          1. Check actor.role == Role.admin
-          2. Hash data.password (passlib / fastapi-users PasswordHelper)
-          3. Insert via user_repo
-          4. Write audit log
-        :raises PermissionDenied: if actor is not an admin
+        Create a new user. Admin only.
+        The service hashes the password (bcrypt) before persisting.
+        :raises PermissionDenied: if actor is not admin
         """
-        # Phase 1 stub - returns a dummy user reflecting the input
-        return User(
-            id="00000000-0000-0000-0000-000000000099",
-            email=data.email,
-            role=data.role,
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
-        )
+        if actor.role != Role.admin:
+            raise PermissionDenied("Only admins can create users")
+
+        # Hash here so plain-text password never reaches the repo or DB.
+        hashed = hash_password(data.password)
+        to_persist = data.model_copy(update={"password": hashed})
+
+        async with self.db.begin():
+            user = await self.user_repo.create(to_persist)
+            await self.audit_repo.create(
+                actor_id=actor.id,
+                action="user_create",
+                target=f"user:{user.id}",
+                details={"email": data.email, "role": data.role.value},
+            )
+
+        # Invalidate users list cache
+        await self.cache.delete(USERS_LIST_KEY)
+        return user
 
     async def change_role(
         self,
@@ -81,46 +78,42 @@ class UserService:
         """
         Change the role of a target user.
         Only admins can perform this action.
-        If the target is the last admin and the change would revoke that role,
-        the operation is blocked.
+        If the target is the last admin, the operation is refused.
         :raises PermissionDenied: if actor is not admin
-        :raises LastAdminError: if this would demote the last admin
-        :raises NotFound: if target_user_id does not exist
+        :raises LastAdminError: if demoting the last admin
+        :raises NotFound: if target user does not exist
         """
-        # Phase 1 stub
-        return User(
-            id=target_user_id,
-            email="changed@example.com",
-            role=update.role,
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
-        )
+        if actor.role != Role.admin:
+            raise PermissionDenied("Only admins can change roles")
 
-    async def list_users(
-        self,
-        actor: User,
-        skip: int = 0,
-        limit: int = 20,
-    ) -> list[User]:
-        """
-        List users (admin only).
-        :raises PermissionDenied: if actor is not admin
-        """
-        # Phase 1 stub
-        now = datetime.now(timezone.utc)
-        return [
-            User(
-                id="00000000-0000-0000-0000-000000000001",
-                email="admin@example.com",
-                role=Role.admin,
-                is_active=True,
-                created_at=now,
-            ),
-            User(
-                id="00000000-0000-0000-0000-000000000002",
-                email="reviewer@example.com",
-                role=Role.reviewer,
-                is_active=True,
-                created_at=now,
-            ),
-        ]
+        async with self.db.begin():
+            target = await self.user_repo.get_by_id(target_user_id)
+            if not target:
+                raise NotFound("Target user not found")
+
+            if target.role == Role.admin and update.role != Role.admin:
+                admin_count = await self.user_repo.count_by_role(Role.admin)
+                if admin_count == 1:
+                    raise LastAdminError("Cannot demote the last admin")
+
+            updated = await self.user_repo.update_role(target_user_id, update.role)
+            await self.audit_repo.create(
+                actor_id=actor.id,
+                action="role_change",
+                target=f"user:{target_user_id}",
+                details={
+                    "old_role": target.role.value,
+                    "new_role": update.role.value,
+                },
+            )
+
+        # Invalidate user‑specific caches
+        await self.cache.delete(user_me_key(target_user_id))
+        await self.cache.delete(USERS_LIST_KEY)
+        return updated
+
+    async def list_users(self, actor: User, skip: int = 0, limit: int = 20) -> list[User]:
+        if actor.role != Role.admin:
+            raise PermissionDenied("Only admins can list users")
+        async with self.db.begin():
+            return await self.user_repo.list_all(limit=limit, offset=skip)

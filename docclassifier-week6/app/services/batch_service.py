@@ -1,24 +1,38 @@
 # Location: app/services/batch_service.py
-# Main purpose: Business logic for batch management.
-# This service handles batch creation, status transitions
-# (pending -> processing -> done | failed), listing, and retrieval.
-# It ensures state changes are audited and cache is invalidated.
+# Business logic: batch management and lifecycle.
+# Transitions are audited and cache is invalidated after each write.
 
-from datetime import datetime, timezone
-
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.batch import Batch, BatchStatus, BatchCreate
 from app.domain.user import User
+from app.repositories.batch_repo import BatchRepo
+from app.repositories.audit_repo import AuditRepo
+from app.infra.cache import (
+    CacheInvalidator,
+    BATCHES_LIST_KEY,
+    batch_key,
+)
+from app.services.exceptions import (
+    PermissionDenied,
+    NotFound,
+    InvalidStateTransition,
+)
 
 
 class BatchService:
     """
     Manages document batches and their lifecycle.
+    Valid status transitions:
+        pending → processing, failed
+        processing → done, failed
+        done → (terminal), failed → (terminal, but may be re‑queued)
     """
 
-    def __init__(self, batch_repo, audit_repo, cache):
-        self.batch_repo = batch_repo
-        self.audit_repo = audit_repo
+    def __init__(self, db: AsyncSession, cache: CacheInvalidator):
+        self.db = db
         self.cache = cache
+        self.batch_repo = BatchRepo(db)
+        self.audit_repo = AuditRepo(db)
 
     async def create_batch(
         self,
@@ -28,91 +42,96 @@ class BatchService:
         """
         Create a new batch in 'pending' state.
         Called by the SFTP ingest worker (no actor) or an admin.
-        :param data: optional BatchCreate input; if None, a fresh one is generated
-        :raises PermissionDenied: in Phase 2, if a non-system non-admin tries to call this
         """
         if data is None:
             data = BatchCreate()
 
-        # Phase 1 stub
-        return Batch(
-            id=data.id,
-            status=BatchStatus.pending,
-            file_count=data.file_count,
-            created_at=datetime.now(timezone.utc),
-        )
+        async with self.db.begin():
+            batch = await self.batch_repo.create(data)
+            await self.audit_repo.create(
+                actor_id=actor.id if actor else None,
+                action="batch_created",
+                target=f"batch:{batch.id}",
+                details={"file_count": data.file_count},
+            )
+
+        # Invalidate batch list cache
+        await self.cache.delete(BATCHES_LIST_KEY)
+        return batch
 
     async def get_batch(self, batch_id: str) -> Batch:
-        """
-        Retrieve a single batch summary.
-        The router composes the response by also calling
-        prediction_service.get_predictions_for_batch(batch_id).
-        :raises NotFound: if batch_id does not exist
-        """
-        # Phase 1 stub
-        return Batch(
-            id=batch_id,
-            status=BatchStatus.processing,
-            file_count=3,
-            created_at=datetime.now(timezone.utc),
-        )
+        async with self.db.begin():
+            batch = await self.batch_repo.get_by_id(batch_id)
+            if not batch:
+                raise NotFound("Batch not found")
+            return batch
 
     async def list_batches(self, skip: int = 0, limit: int = 20) -> list[Batch]:
-        """
-        Return a paginated list of batch summaries.
-        """
-        now = datetime.now(timezone.utc)
-        return [
-            Batch(
-                id="10000000-0000-0000-0000-000000000001",
-                status=BatchStatus.done,
-                file_count=5,
-                created_at=now,
-            ),
-            Batch(
-                id="10000000-0000-0000-0000-000000000002",
-                status=BatchStatus.processing,
-                file_count=2,
-                created_at=now,
-            ),
-        ]
+        async with self.db.begin():
+            return await self.batch_repo.list(limit=limit, offset=skip)
+
+    async def _transition(
+        self, batch_id: str, new_status: BatchStatus, allowed: set[BatchStatus]
+    ) -> Batch:
+        """Shared logic for status transitions."""
+        async with self.db.begin():
+            batch = await self.batch_repo.get_by_id(batch_id)
+            if not batch:
+                raise NotFound("Batch not found")
+
+            if batch.status not in allowed:
+                raise InvalidStateTransition(
+                    f"Cannot move from '{batch.status.value}' to '{new_status.value}'"
+                )
+
+            updated = await self.batch_repo.update_status(batch_id, new_status)
+            if not updated:
+                raise NotFound("Batch not found after update")
+
+            await self.audit_repo.create(
+                actor_id=None,
+                action="batch_state_change",
+                target=f"batch:{batch_id}",
+                details={
+                    "from": batch.status.value,
+                    "to": new_status.value,
+                },
+            )
+
+        # Invalidate both the specific batch and the list
+        await self.cache.delete(batch_key(batch_id))
+        await self.cache.delete(BATCHES_LIST_KEY)
+        return updated
 
     async def mark_processing(self, batch_id: str) -> Batch:
         """
-        Transition a batch to 'processing' state.
-        :raises InvalidStateTransition: in Phase 2, if batch is already terminal (done/failed)
-        :raises NotFound: if batch_id does not exist
+        Transition batch to 'processing' state.
+        Allowed from: pending.
         """
-        return Batch(
-            id=batch_id,
-            status=BatchStatus.processing,
-            file_count=0,
-            created_at=datetime.now(timezone.utc),
+        return await self._transition(
+            batch_id,
+            BatchStatus.processing,
+            allowed={BatchStatus.pending},
         )
 
     async def mark_done(self, batch_id: str) -> Batch:
         """
-        Transition a batch to 'done' state.
-        :raises InvalidStateTransition: in Phase 2, if batch is 'pending'
-            (must pass through 'processing' first) or already terminal.
-        :raises NotFound: if batch_id does not exist
+        Transition batch to 'done' state.
+        Allowed from: processing.
         """
-        return Batch(
-            id=batch_id,
-            status=BatchStatus.done,
-            file_count=10,
-            created_at=datetime.now(timezone.utc),
+        return await self._transition(
+            batch_id,
+            BatchStatus.done,
+            allowed={BatchStatus.processing},
         )
 
     async def mark_failed(self, batch_id: str) -> Batch:
         """
-        Transition a batch to 'failed' state.
-        Called by the inference worker when an inference job exhausts retries.
-        :raises NotFound: if batch_id does not exist
+        Transition batch to 'failed' state.
+        Allowed from: pending, processing.
         """
-        return Batch(
-            id=batch_id,
-            status=BatchStatus.failed,
-            file_count=0,
-            created_at=datetime.now(timezone.utc),
+        return await self._transition(
+            batch_id,
+            BatchStatus.failed,
+            allowed={BatchStatus.pending, BatchStatus.processing},
         )
