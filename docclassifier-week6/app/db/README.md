@@ -78,8 +78,8 @@ overlay_key     string (path in MinIO for the annotated overlay)
 predicted_class string (e.g. "invoice")
 confidence      float (0.0 to 1.0)
 relabeled_class string | null (if a reviewer corrected the AI)
-relabeled_by    UUID | null (who made the correction)
 created_at      timestamp
+updated_at      timestamp
 ```
 
 ### 4. `audit_log` — Who Did What
@@ -95,11 +95,13 @@ created_at timestamp
 
 ### 5. `casbin_rule` — Permission Rules
 Casbin (the permission library) stores its rules in this table.
+The table is created automatically by `casbin-sqlalchemy-adapter` — it does not appear
+in the Alembic migrations (Alembic manages only application tables).
 ```python
 id    integer, primary key
-ptype string (policy type)
+ptype string (policy type: "p" for policy, "g" for group/role)
 v0    string (role, e.g. "admin")
-v1    string (resource, e.g. "/batches")
+v1    string (resource, e.g. "/batches/detail")
 v2    string (action, e.g. "GET")
 ```
 

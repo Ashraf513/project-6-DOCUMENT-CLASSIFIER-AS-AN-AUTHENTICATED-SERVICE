@@ -24,13 +24,13 @@ class Prediction(BaseModel):
     confidence:      float
     relabeled_class: str | None = None  # set by reviewer; None until relabeled
     created_at:      datetime
+    updated_at:      datetime | None = None
 
     model_config = {"from_attributes": True}
 
 
 class PredictionCreate(BaseModel):
-    """Input shape used by PredictionRepository.create()."""
-    batch_id:        str
+    """Input shape used by PredictionRepository.create(). batch_id passed separately to repo."""
     filename:        str
     blob_key:        str
     overlay_key:     str
@@ -45,7 +45,6 @@ class PredictionRelabel(BaseModel):
     @field_validator("relabeled_class")
     @classmethod
     def must_be_valid_class(cls, v: str) -> str:
-        # Validated automatically on model creation — no need to call manually.
         if v not in CLASSES:
             raise ValueError(
                 f"'{v}' is not a valid class. Choose from: {CLASSES}"

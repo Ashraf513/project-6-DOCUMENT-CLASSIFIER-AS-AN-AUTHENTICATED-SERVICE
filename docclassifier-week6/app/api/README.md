@@ -59,23 +59,29 @@ app/api/
 
 ```python
 from fastapi import FastAPI
-from app.api.routers import auth, users, batches, predictions
+from contextlib import asynccontextmanager
+from app.api.routers import auth, users, batches, predictions, audit
 
-app = FastAPI(title="Document Classifier API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1. Verify classifier weights + SHA-256 (skipped in dev if DEV_SKIP_MODEL_CHECK=1)
+    verify_model_integrity()
+    # 2. Connect to Vault, load JWT signing key — refuses to start if Vault is unreachable
+    jwt_secret = get_secret("JWT_SECRET")
+    # 3. Load Casbin enforcer from DB (seeded from casbin/policy.csv on first boot)
+    app.state.enforcer = await _init_casbin_enforcer(...)
+    # 4. Create shared Redis pool for caching
+    app.state.redis = redis.from_url(redis_url)
+    FastAPICache.init(RedisBackend(app.state.redis), prefix="")
+    yield
+    await app.state.redis.aclose()
 
-# Register all routers with their URL prefixes
-app.include_router(auth.router,        prefix="/auth")
-app.include_router(users.router,       prefix="/users")
-app.include_router(batches.router,     prefix="/batches")
-app.include_router(predictions.router, prefix="/predictions")
-
-@app.on_event("startup")
-async def startup():
-    # 1. Connect to Vault, load JWT signing key
-    # 2. Verify classifier weights + SHA-256
-    # 3. Verify Casbin policy table is not empty
-    # If any check fails → raise exception → app refuses to start
-    ...
+app = FastAPI(title="Document Classifier API", lifespan=lifespan)
+app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(batches.router)
+app.include_router(predictions.router)
+app.include_router(audit.router)
 ```
 
 ---
@@ -110,24 +116,21 @@ async def require_reviewer(user: User = Depends(get_current_user)) -> User:
 
 | Method | URL | What It Does |
 |--------|-----|--------------|
-| POST | `/auth/register` | Create a new account (email + password) |
-| POST | `/auth/login` | Log in, receive a JWT token |
-| POST | `/auth/refresh` | Get a new token before the old one expires |
-| GET | `/auth/me` | Get your own user info (cached) |
+| POST | `/auth/jwt/login` | Log in, receive a JWT token |
+| POST | `/auth/jwt/logout` | Invalidate the current token |
+| GET | `/users/me` | Get your own user info |
+
+> **Note:** There is no public `/auth/register` endpoint. Users are created only by admins
+> via `POST /users/`. This is intentional — open registration would allow anyone to create
+> accounts with any role.
 
 ```python
-@router.post("/login")
-async def login(credentials: LoginRequest,
-                user_service: UserService = Depends(get_user_service)):
-    # 1. Look up user by email
-    # 2. Verify password matches stored hash
-    # 3. Create a JWT token signed with the key from Vault
-    # 4. Return {"access_token": "...", "token_type": "bearer"}
-    ...
+@router.post("/auth/jwt/login")
+# Handled by fastapi-users — verifies Argon2id hash, returns JWT signed with Vault secret
+# Rate-limited: 5 attempts / 60 s / IP address
 
-@router.get("/me")
-@cache(expire=300)  # cache for 5 minutes
-async def get_me(user: User = Depends(get_current_user)):
+@router.get("/users/me")
+async def get_me(user: User = Depends(current_domain_user)):
     return user
 ```
 
@@ -140,10 +143,9 @@ JWT (JSON Web Token) is a signed string that proves who you are. It looks like: 
 
 | Method | URL | Who Can Call | What It Does |
 |--------|-----|-------------|--------------|
-| POST | `/users/invite` | admin | Create a new user account |
+| POST | `/users/` | admin | Create a new user account |
 | GET | `/users/` | admin | List all users |
 | PATCH | `/users/{id}/role` | admin | Change a user's role |
-| GET | `/users/audit-log` | admin | View all audit log entries |
 
 ```python
 @router.patch("/{user_id}/role")
@@ -244,17 +246,15 @@ When a batch changes state, the service calls `cache.delete("batches:list")`, so
 ## Authentication Flow (Full Example)
 
 ```bash
-# Step 1: Register
-curl -X POST http://localhost:8000/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email": "alice@example.com", "password": "secret123"}'
+# Step 1: Admin creates an account for you (no self-registration)
+#   → done by admin via POST /users/
 
 # Step 2: Login → get token
-TOKEN=$(curl -X POST http://localhost:8000/auth/login \
-  -d "username=alice@example.com&password=secret123" | jq -r .access_token)
+TOKEN=$(curl -X POST http://localhost:8000/auth/jwt/login \
+  -d "username=alice@example.com&password=YourPassword1!" | jq -r .access_token)
 
 # Step 3: Call authenticated endpoints
-curl http://localhost:8000/batches \
+curl http://localhost:8000/batches/ \
   -H "Authorization: Bearer $TOKEN"
 ```
 

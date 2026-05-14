@@ -1,27 +1,20 @@
 # Location: app/services/user_service.py
 # Business logic: user creation, role changes, profile.
-# All methods are async. They own transaction boundaries and cache invalidation.
+# All methods own transaction boundaries and cache invalidation.
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.domain.user import User, Role, UserCreate, UserRoleUpdate
 from app.repositories.user_repo import UserRepo
 from app.repositories.audit_repo import AuditRepo
-from app.infra.cache import (
-    CacheInvalidator,
-    USERS_LIST_KEY,
-    user_me_key,
-)
+from app.infra.cache import CacheInvalidator, USERS_LIST_KEY, user_me_key
 from app.infra.security import hash_password
-from app.services.exceptions import (
-    PermissionDenied,
-    NotFound,
-    LastAdminError,
-)
+from app.services.exceptions import PermissionDenied, NotFound, LastAdminError
 
 
 class UserService:
     """
-    Handles user‑related business logic.
+    Handles user-related business logic.
     - Only admins can create / change roles.
     - The last admin cannot be demoted.
     - Role changes are audited and cached data is invalidated.
@@ -30,7 +23,7 @@ class UserService:
     def __init__(self, db: AsyncSession, cache: CacheInvalidator):
         self.db = db
         self.cache = cache
-        self.user_repo = UserRepo(db)
+        self.user_repo  = UserRepo(db)
         self.audit_repo = AuditRepo(db)
 
     async def get_me(self, user_id: str) -> User:
@@ -47,16 +40,15 @@ class UserService:
         if actor.role != Role.admin:
             raise PermissionDenied("Only admins can create users")
 
-        hashed = hash_password(data.password)
-        to_persist = data.model_copy(update={"password": hashed})
+        hashed = hash_password(data.password.get_secret_value())
 
         async with self.db.begin():
-            user = await self.user_repo.create(to_persist)
+            user = await self.user_repo.create(data, hashed_credential=hashed)
             await self.audit_repo.create(
                 actor_id=actor.id,
                 action="user_create",
                 target=f"user:{user.id}",
-                details={"email": data.email, "role": data.role.value},
+                details={"email": str(data.email), "role": data.role.value},
             )
 
         await self.cache.delete(USERS_LIST_KEY)

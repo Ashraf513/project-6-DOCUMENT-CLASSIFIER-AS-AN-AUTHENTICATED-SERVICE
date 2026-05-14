@@ -1,6 +1,5 @@
 # File: app/api/deps.py
 
-import os
 from typing import AsyncGenerator
 
 import casbin
@@ -8,10 +7,8 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
-from app.infra.cache import (
-    CacheInvalidator,
-    RedisCacheInvalidator,
-)
+from app.infra.cache import CacheInvalidator, RedisCacheInvalidator
+from app.services.audit_service import AuditService
 from app.services.batch_service import BatchService
 from app.services.prediction_service import PredictionService
 from app.services.user_service import UserService
@@ -27,16 +24,11 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 # =========================
-# Cache Dependency
+# Cache Dependency — uses the shared pool from app.state (H-4)
 # =========================
 
-async def get_cache() -> AsyncGenerator[CacheInvalidator, None]:
-    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
-    cache = RedisCacheInvalidator(redis_url)
-    try:
-        yield cache
-    finally:
-        await cache.close()
+def get_cache(request: Request) -> CacheInvalidator:
+    return RedisCacheInvalidator.from_client(request.app.state.redis)
 
 
 # =========================
@@ -70,3 +62,9 @@ async def get_prediction_service(
     cache: CacheInvalidator = Depends(get_cache),
 ) -> PredictionService:
     return PredictionService(db, cache)
+
+
+async def get_audit_service(
+    db: AsyncSession = Depends(get_db),
+) -> AuditService:
+    return AuditService(db)

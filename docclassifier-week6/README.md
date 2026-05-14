@@ -101,7 +101,7 @@ This project uses `docker-compose` to start 9 services simultaneously on your la
 
 ---
 
-## Quick Start (After the Model Is Trained)
+## Quick Start
 
 ```bash
 # 1. Clone the repo
@@ -109,14 +109,20 @@ git clone <repo-url>
 cd docclassifier-week6
 
 # 2. Copy the example environment file
-cp .env.example .env
+copy .env.example .env        # Windows
+# cp .env.example .env        # Mac/Linux
 
-# 3. Start everything
-docker-compose up
+# 3. Build and start everything
+docker-compose up --build
 
-# 4. The API will be available at:
-#    http://localhost:8000/docs   (interactive Swagger UI)
+# 4. Seed the first admin user (in a second terminal)
+docker-compose run --rm api python scripts/seed_admin.py
+
+# 5. Open the interactive API docs
+#    http://localhost:8000/docs
 ```
+
+For full beginner-friendly instructions (step 0 through troubleshooting) see [test_locally.md](test_locally.md).
 
 ---
 

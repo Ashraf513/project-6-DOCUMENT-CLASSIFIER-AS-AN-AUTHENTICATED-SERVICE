@@ -1,5 +1,5 @@
 # Location: app/repositories/audit_repo.py
-# Fixed version – does NOT commit; transaction is handled by services.
+# Append-only audit log repository.  Does NOT commit; transaction is owned by services.
 
 from __future__ import annotations
 
@@ -26,10 +26,7 @@ class AuditRepo:
         target: str,
         details: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """
-        Create an audit log entry (does NOT commit).
-        Returns the new log ID.
-        """
+        """Create an audit log entry (does NOT commit). Returns the new log ID."""
         log_id = str(uuid.uuid4())
         log_orm = AuditLogORM(
             id=log_id,
@@ -39,35 +36,34 @@ class AuditRepo:
             details=details,
         )
         self.session.add(log_orm)
-        # No commit – the service will commit
         return log_id
 
-    async def get_by_actor(self, actor_id: str, limit: int = 100) -> List[AuditLogORM]:
+    async def get_by_actor(self, actor_id: str, limit: int = 100) -> List[AuditLogEntry]:
         result = await self.session.execute(
             select(AuditLogORM)
             .where(AuditLogORM.actor_id == actor_id)
             .order_by(AuditLogORM.timestamp.desc())
             .limit(limit)
         )
-        return result.scalars().all()
+        return [AuditLogEntry.model_validate(e) for e in result.scalars().all()]
 
-    async def get_by_action(self, action: str, limit: int = 100) -> List[AuditLogORM]:
+    async def get_by_action(self, action: str, limit: int = 100) -> List[AuditLogEntry]:
         result = await self.session.execute(
             select(AuditLogORM)
             .where(AuditLogORM.action == action)
             .order_by(AuditLogORM.timestamp.desc())
             .limit(limit)
         )
-        return result.scalars().all()
+        return [AuditLogEntry.model_validate(e) for e in result.scalars().all()]
 
-    async def get_by_target(self, target: str, limit: int = 100) -> List[AuditLogORM]:
+    async def get_by_target(self, target: str, limit: int = 100) -> List[AuditLogEntry]:
         result = await self.session.execute(
             select(AuditLogORM)
             .where(AuditLogORM.target == target)
             .order_by(AuditLogORM.timestamp.desc())
             .limit(limit)
         )
-        return result.scalars().all()
+        return [AuditLogEntry.model_validate(e) for e in result.scalars().all()]
 
     async def list_recent(self, limit: int = 100) -> List[AuditLogEntry]:
         result = await self.session.execute(

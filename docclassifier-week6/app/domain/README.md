@@ -79,7 +79,7 @@ class User(BaseModel):
 
 class UserCreate(BaseModel):
     email:    EmailStr
-    password: str             # plain text — only used for registration input
+    password: SecretStr       # SecretStr prevents accidental logging of plain-text passwords
     role:     UserRole = UserRole.auditor  # default role
 
 class UserUpdate(BaseModel):
@@ -131,9 +131,9 @@ class Prediction(BaseModel):
     overlay_key:     str        # path in MinIO to the annotated image
     predicted_class: str        # what the AI said (e.g. "invoice")
     confidence:      float      # how sure the AI was (0.0–1.0)
-    relabeled_class: str | None # what a reviewer corrected it to
-    relabeled_by:    UUID | None
+    relabeled_class: str | None # what a reviewer corrected it to (None if not corrected)
     created_at:      datetime
+    updated_at:      datetime | None
 
 class PredictionRelabel(BaseModel):
     new_class: str              # the corrected label from a reviewer
@@ -178,7 +178,7 @@ Each arrow is a transformation — no raw database objects leak to the HTTP laye
   - Answer: isolation — changes to DB schema don't automatically change the API contract
 - Why use Pydantic instead of plain Python dataclasses?
   - Answer: automatic validation — bad data is rejected at the boundary, not silently passed through
-- Why does `UserCreate` have `password` but `User` does not?
-  - Answer: `UserCreate` is input (from the client), `User` is output (to the client); we never return passwords
+- Why does `UserCreate` have `password: SecretStr` but `User` does not have a password field at all?
+  - Answer: `UserCreate` is input (from the client), `User` is output (to the client); we never return passwords. `SecretStr` prevents the password from being logged accidentally via `repr()` or `str()`
 - What is an `Enum` and why use it for roles and statuses?
   - Answer: prevents typos — you can't set `role = "admine"` if the Enum only has `"admin"`

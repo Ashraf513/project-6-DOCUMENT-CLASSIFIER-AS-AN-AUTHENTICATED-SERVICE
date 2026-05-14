@@ -1,0 +1,5 @@
+# Dependencies are managed in pyproject.toml.
+# To generate a pip-compatible requirements file run:
+#   uv export --no-dev --output-file requirements.txt
+# or:
+#   pip-compile pyproject.toml -o requirements.txt

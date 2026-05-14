@@ -1,0 +1,304 @@
+# =============================================================================
+# Document Classifier — docker-compose stack
+#
+# Usage (fresh clone):
+#   cp .env.example .env          # fill in VAULT_TOKEN and any port overrides
+#   docker-compose up --build
+#
+# Service boot order:
+#   1. db · redis · minio · sftp · vault          (parallel, infrastructure)
+#   2. vault-init · minio-init · migrate           (one-shot init, parallel)
+#   3. api                                         (waits for all inits + migrate)
+#   4. worker · sftp-ingest                        (wait for api healthy)
+#
+# .env holds only: VAULT_TOKEN, port overrides (CORS_ORIGINS, JWT_LIFETIME_SECONDS).
+# All application secrets (JWT_SECRET, MinIO credentials) are seeded into Vault
+# by vault-init and read back at runtime via app/infra/vault.py.
+# =============================================================================
+
+# No `version:` key — Compose v2+ format (Docker Compose ≥ 2.20)
+
+services:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # INFRASTRUCTURE LAYER
+  # These services start first and have no build step.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     docclassifier
+      POSTGRES_DB:       docclassifier
+      # Internal network credential — not exposed to the host, not in .env
+      POSTGRES_PASSWORD: docclassifier_dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docclassifier -d docclassifier"]
+      interval:     5s
+      timeout:      5s
+      retries:      10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+
+  redis:
+    image: redis:7-alpine
+    # Persistence: snapshot every 60 s if ≥1 key changed; in-memory LRU eviction
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel warning
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval:     5s
+      timeout:      3s
+      retries:      10
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval:     10s
+      timeout:      5s
+      retries:      5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+
+  sftp:
+    # atmoz/sftp format: user:pass:uid:gid:homedir
+    # Creates /home/scanner/upload/ — the scanner vendor SCP target
+    image: atmoz/sftp:latest
+    command: scanner:scanner:1001:1001:upload
+    volumes:
+      - sftp_upload:/home/scanner/upload
+    ports:
+      - "${SFTP_PORT:-2222}:22"
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+
+  vault:
+    image: hashicorp/vault:latest
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID:  "${VAULT_TOKEN:-root}"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    cap_add:
+      - IPC_LOCK      # required: Vault locks memory to prevent secrets swapping to disk
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://localhost:8200"]
+      interval:     5s
+      timeout:      3s
+      retries:      10
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ONE-SHOT INIT CONTAINERS
+  # Run once, exit 0, then the dependent services start.
+  # restart: "no" prevents compose from re-running them on container restart.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  vault-init:
+    # Seeds all application secrets into Vault KV v2.
+    # The app reads JWT_SECRET (and future secrets) exclusively from Vault.
+    # DATABASE_URL is passed via environment — it is operational config,
+    # not a secret, so it does not go through Vault.
+    image: hashicorp/vault:latest
+    environment:
+      VAULT_ADDR:  http://vault:8200
+      VAULT_TOKEN: "${VAULT_TOKEN:-root}"
+    depends_on:
+      vault:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "[vault-init] Enabling KV v2..."
+        # Dev mode mounts secret/ as KV v1 by default — disable and re-enable as v2
+        vault secrets disable secret/ 2>/dev/null || true
+        vault secrets enable -path=secret kv-v2
+
+        echo "[vault-init] Seeding secrets..."
+        # Generate a random 64-char JWT signing key at first boot
+        JWT_SECRET=$$(dd if=/dev/urandom bs=48 count=1 2>/dev/null | base64 | tr -d '\n=')
+        vault kv put secret/docclassifier \
+          JWT_SECRET="$$JWT_SECRET" \
+          MINIO_ACCESS_KEY="minioadmin" \
+          MINIO_SECRET_KEY="minioadmin" \
+          SFTP_USER="scanner" \
+          SFTP_PASSWORD="scanner"
+
+        echo "[vault-init] Done. Secrets available at secret/docclassifier."
+    restart: "no"
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+
+  minio-init:
+    # Creates the application bucket in MinIO after MinIO is healthy.
+    # Workers write originals and overlay PNGs to the "documents" bucket.
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 minioadmin minioadmin
+        mc mb --ignore-existing local/documents
+        echo "[minio-init] Bucket 'documents' ready."
+    restart: "no"
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+
+  migrate:
+    # Runs `alembic upgrade head` and exits 0.
+    # docker-compose waits for service_completed_successfully before starting api.
+    build:
+      context:  .
+      target:   migrate
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://docclassifier:docclassifier_dev@db:5432/docclassifier"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - backend
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # APPLICATION LAYER
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  api:
+    build:
+      context: .
+      target:  api
+    environment:
+      DATABASE_URL:          "postgresql+asyncpg://docclassifier:docclassifier_dev@db:5432/docclassifier"
+      REDIS_URL:             redis://redis:6379/0
+      VAULT_ADDR:            http://vault:8200
+      VAULT_TOKEN:           "${VAULT_TOKEN:-root}"
+      CORS_ORIGINS:          "${CORS_ORIGINS:-http://localhost:3000}"
+      JWT_LIFETIME_SECONDS:  "${JWT_LIFETIME_SECONDS:-86400}"
+      DEV_SKIP_MODEL_CHECK:  "${DEV_SKIP_MODEL_CHECK:-0}"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      vault-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    # HEALTHCHECK is declared in the Dockerfile (polls /health every 30 s)
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+
+  worker:
+    build:
+      context: .
+      target:  worker
+    environment:
+      DATABASE_URL:    "postgresql+asyncpg://docclassifier:docclassifier_dev@db:5432/docclassifier"
+      REDIS_URL:       redis://redis:6379/0
+      VAULT_ADDR:      http://vault:8200
+      VAULT_TOKEN:     "${VAULT_TOKEN:-root}"
+      MINIO_ENDPOINT:  minio:9000
+    depends_on:
+      api:
+        condition: service_healthy  # waits for api HEALTHCHECK to pass
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+
+  sftp-ingest:
+    build:
+      context: .
+      target:  sftp-ingest
+    environment:
+      DATABASE_URL:      "postgresql+asyncpg://docclassifier:docclassifier_dev@db:5432/docclassifier"
+      REDIS_URL:         redis://redis:6379/0
+      VAULT_ADDR:        http://vault:8200
+      VAULT_TOKEN:       "${VAULT_TOKEN:-root}"
+      SFTP_HOST:         sftp
+      SFTP_PORT:         "22"
+      SFTP_USER:         scanner
+      SFTP_PASSWORD:     scanner
+      SFTP_WATCH_PATH:   /upload
+      SFTP_POLL_INTERVAL: "5"      # poll every 5 s — brief requires pickup < 5 s
+      MINIO_ENDPOINT:    minio:9000
+    depends_on:
+      api:
+        condition: service_healthy
+      sftp:
+        condition: service_started  # atmoz/sftp has no healthcheck endpoint
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # VOLUMES & NETWORKS
+  # ═══════════════════════════════════════════════════════════════════════════
+
+volumes:
+  postgres_data:   # Postgres WAL and data files
+  redis_data:      # RDB snapshot
+  minio_data:      # Document originals and overlay PNGs
+  sftp_upload:     # Drop zone polled by sftp-ingest
+
+networks:
+  backend:
+    # Isolated bridge network — only explicitly port-mapped services are
+    # reachable from the host; inter-service comms stay inside this network.
+    driver: bridge

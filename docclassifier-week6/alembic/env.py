@@ -24,10 +24,7 @@ target_metadata = Base.metadata
 # ---------------------------------------------------------------------------
 # Database URL – defaults to local test DB
 # ---------------------------------------------------------------------------
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:password@localhost:5432/docclassifier"
-)
+DATABASE_URL = os.environ["DATABASE_URL"]  # must be set; no insecure default
 
 
 def run_migrations_offline() -> None:
