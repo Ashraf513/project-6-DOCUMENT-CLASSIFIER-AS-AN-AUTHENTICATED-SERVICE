@@ -3,7 +3,7 @@ p, admin, /users, GET
 p, admin, /users, POST
 p, admin, /users/role, PATCH
 p, admin, /batches, GET
-p, admin, /batches/1, GET
+p, admin, /batches/detail, GET
 p, admin, /predictions/recent, GET
 p, admin, /predictions/batch, GET
 p, admin, /predictions/relabel, PATCH
@@ -11,14 +11,14 @@ p, admin, /audit, GET
 
 # Reviewer - view batches/predictions, relabel
 p, reviewer, /batches, GET
-p, reviewer, /batches/1, GET
+p, reviewer, /batches/detail, GET
 p, reviewer, /predictions/recent, GET
 p, reviewer, /predictions/batch, GET
 p, reviewer, /predictions/relabel, PATCH
 
 # Auditor - read-only on batches and audit log
 p, auditor, /batches, GET
-p, auditor, /batches/1, GET
+p, auditor, /batches/detail, GET
 p, auditor, /predictions/recent, GET
 p, auditor, /predictions/batch, GET
 p, auditor, /audit, GET
