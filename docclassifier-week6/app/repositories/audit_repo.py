@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AuditLog as AuditLogORM
+from app.domain.audit import AuditLogEntry
 
 
 class AuditRepo:
@@ -68,10 +69,10 @@ class AuditRepo:
         )
         return result.scalars().all()
 
-    async def list_recent(self, limit: int = 100) -> List[AuditLogORM]:
+    async def list_recent(self, limit: int = 100) -> List[AuditLogEntry]:
         result = await self.session.execute(
             select(AuditLogORM)
             .order_by(AuditLogORM.timestamp.desc())
             .limit(limit)
         )
-        return result.scalars().all()
+        return [AuditLogEntry.model_validate(e) for e in result.scalars().all()]

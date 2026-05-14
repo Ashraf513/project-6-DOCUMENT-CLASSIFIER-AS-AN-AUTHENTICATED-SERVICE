@@ -40,3 +40,20 @@ class UserCreate(BaseModel):
 class UserRoleUpdate(BaseModel):
     """Input shape for the admin role-toggle endpoint."""
     role: Role
+    
+class UserRead(BaseModel):
+    """Public user representation (no password hash)."""
+    id:         str
+    email:      EmailStr
+    role:       Role
+    is_active:  bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class UserUpdate(BaseModel):
+    """Optional fields a user can update on their own profile."""
+    email:     EmailStr | None = None
+    password:  str | None = None
+    is_active: bool | None = None

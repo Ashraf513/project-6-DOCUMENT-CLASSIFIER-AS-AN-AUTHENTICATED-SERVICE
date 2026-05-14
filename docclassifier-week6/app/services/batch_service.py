@@ -39,10 +39,6 @@ class BatchService:
         data: BatchCreate | None = None,
         actor: User | None = None,
     ) -> Batch:
-        """
-        Create a new batch in 'pending' state.
-        Called by the SFTP ingest worker (no actor) or an admin.
-        """
         if data is None:
             data = BatchCreate()
 
@@ -55,7 +51,6 @@ class BatchService:
                 details={"file_count": data.file_count},
             )
 
-        # Invalidate batch list cache
         await self.cache.delete(BATCHES_LIST_KEY)
         return batch
 
@@ -73,7 +68,6 @@ class BatchService:
     async def _transition(
         self, batch_id: str, new_status: BatchStatus, allowed: set[BatchStatus]
     ) -> Batch:
-        """Shared logic for status transitions."""
         async with self.db.begin():
             batch = await self.batch_repo.get_by_id(batch_id)
             if not batch:
@@ -98,16 +92,11 @@ class BatchService:
                 },
             )
 
-        # Invalidate both the specific batch and the list
         await self.cache.delete(batch_key(batch_id))
         await self.cache.delete(BATCHES_LIST_KEY)
         return updated
 
     async def mark_processing(self, batch_id: str) -> Batch:
-        """
-        Transition batch to 'processing' state.
-        Allowed from: pending.
-        """
         return await self._transition(
             batch_id,
             BatchStatus.processing,
@@ -115,10 +104,6 @@ class BatchService:
         )
 
     async def mark_done(self, batch_id: str) -> Batch:
-        """
-        Transition batch to 'done' state.
-        Allowed from: processing.
-        """
         return await self._transition(
             batch_id,
             BatchStatus.done,
@@ -126,10 +111,6 @@ class BatchService:
         )
 
     async def mark_failed(self, batch_id: str) -> Batch:
-        """
-        Transition batch to 'failed' state.
-        Allowed from: pending, processing.
-        """
         return await self._transition(
             batch_id,
             BatchStatus.failed,

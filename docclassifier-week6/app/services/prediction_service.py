@@ -8,16 +8,16 @@ from app.domain.prediction import Prediction, PredictionCreate, PredictionRelabe
 from app.domain.user import User, Role
 from app.repositories.prediction_repo import PredictionRepo
 from app.repositories.audit_repo import AuditRepo
-from app.infra.cache import CacheInvalidator
+from app.infra.cache import (
+    CacheInvalidator,
+    PREDICTIONS_RECENT_KEY,
+    batch_key,
+    predictions_batch_key,
+)
 from app.services.exceptions import (
     PermissionDenied,
     NotFound,
     RelabelNotAllowed,
-)
-from app.infra.cache import (
-    PREDICTIONS_RECENT_KEY,
-    batch_key,
-    predictions_batch_key,
 )
 
 
@@ -37,13 +37,9 @@ class PredictionService:
         batch_id: str,
         data: PredictionCreate,
     ) -> Prediction:
-        """
-        Persist a new prediction (called by inference worker).
-        """
         async with self.db.begin():
             prediction = await self.prediction_repo.create(batch_id, data)
 
-        # Invalidate caches that now contain stale data
         await self.cache.delete(PREDICTIONS_RECENT_KEY)
         await self.cache.delete(batch_key(batch_id))
         await self.cache.delete(predictions_batch_key(batch_id))
@@ -70,14 +66,6 @@ class PredictionService:
         update: PredictionRelabel,
         actor: User,
     ) -> Prediction:
-        """
-        Relabel a prediction (admin or reviewer).
-        Reviewers can only relabel predictions with confidence < 0.7.
-        The original predicted_class is never overwritten;
-        relabeled_class is set to the reviewer's choice.
-        :raises PermissionDenied: if actor lacks role or confidence >= 0.7
-        :raises NotFound: if prediction does not exist
-        """
         if actor.role not in (Role.admin, Role.reviewer):
             raise PermissionDenied("Only reviewers and admins can relabel")
 
@@ -105,8 +93,7 @@ class PredictionService:
                 },
             )
 
-        # Invalidate caches that now contain stale data
-        await self.cache.delete("predictions:recent")
-        await self.cache.delete(f"batch:{pred.batch_id}")
-        await self.cache.delete(f"predictions:batch:{pred.batch_id}")
+        await self.cache.delete(PREDICTIONS_RECENT_KEY)
+        await self.cache.delete(batch_key(pred.batch_id))
+        await self.cache.delete(predictions_batch_key(pred.batch_id))
         return updated

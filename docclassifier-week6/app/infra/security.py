@@ -1,42 +1,36 @@
 """
 Password hashing for the service layer.
 
-Uses bcrypt directly (no passlib).  bcrypt is what fastapi-users uses
-internally, so hashes produced here are compatible with fastapi-users'
-verifier when Hussien wires auth.
+Uses pwdlib, the same library fastapi-users 15+ uses internally.
+By sharing pwdlib's recommended hasher (Argon2id), hashes written by
+the service round-trip cleanly through fastapi-users' login verifier
+and vice-versa.
 
 The service layer calls hash_password() before handing the value to the
-user repository, and calls verify_password() during login.  Routers and
-repos do not import this module.
-
-bcrypt has a hard 72-byte input limit.  We pre-hash with SHA-256 so
-longer passwords are accepted without truncation surprises - this is
-the same workaround Django and fastapi-users use.
+user repository, and verify_password() is available for any non-fastapi-users
+verification (admin scripts, integration tests).  Routers and repos do
+not import this module.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
-
-import bcrypt
+from pwdlib import PasswordHash
 
 
-def _prepare(plain: str) -> bytes:
-    """SHA-256 pre-hash to sidestep bcrypt's 72-byte input limit."""
-    digest = hashlib.sha256(plain.encode("utf-8")).digest()
-    return base64.b64encode(digest)
+# Shared instance.  PasswordHash.recommended() picks Argon2id and is the
+# default fastapi-users uses, so hashes are interchangeable.
+_pwd = PasswordHash.recommended()
 
 
 def hash_password(plain: str) -> str:
-    """Return a bcrypt hash string for a plain-text password."""
-    return bcrypt.hashpw(_prepare(plain), bcrypt.gensalt()).decode("utf-8")
+    """Return an Argon2id hash string for a plain-text password."""
+    return _pwd.hash(plain)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Verify a plain-text password against a stored bcrypt hash."""
+    """Verify a plain-text password against a stored Argon2id hash."""
     try:
-        return bcrypt.checkpw(_prepare(plain), hashed.encode("utf-8"))
-    except ValueError:
-        # Malformed hash on disk - treat as a verification failure.
+        return _pwd.verify(plain, hashed)
+    except Exception:
+        # Malformed or unknown-scheme hash on disk - treat as failure.
         return False
