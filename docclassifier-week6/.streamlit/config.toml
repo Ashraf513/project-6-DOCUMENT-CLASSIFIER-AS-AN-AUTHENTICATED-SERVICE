@@ -1,0 +1,18 @@
+[theme]
+# Accent — teal, used for buttons, active tabs, highlights
+primaryColor             = "#0f766e"
+
+# Main canvas — pure white, maximum contrast and readability
+backgroundColor          = "#ffffff"
+
+# Sidebar + widget backgrounds — barely-there cool gray
+secondaryBackgroundColor = "#f1f5f9"
+
+# Body text — slate-900, crisp without being harsh pure black
+textColor                = "#0f172a"
+
+font                     = "sans serif"
+
+[server]
+headless   = true
+enableCORS = false
