@@ -5,6 +5,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from fastapi_users.schemas import BaseUserCreate   # <-- new import
 from fastapi_users import FastAPIUsers, BaseUserManager
 from fastapi_users.authentication import (
     AuthenticationBackend,
@@ -118,7 +119,22 @@ router.include_router(
     prefix="/jwt",
 )
 
+class AuthUserCreate(BaseUserCreate):
+    """Schema for public registration (email + password only)."""
+    # No role here – the ORM model defaults to Role.auditor automatically.
+    pass
+
+# =========================
+# Routers
+# =========================
+
 router.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
+    fastapi_users.get_auth_router(auth_backend),
+    prefix="/jwt",
+)
+
+# Use AuthUserCreate instead of UserCreate here
+router.include_router(
+    fastapi_users.get_register_router(UserRead, AuthUserCreate),
     prefix="/register",
 )
