@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  # ── Lint & type-check (fast feedback) ──────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync --group dev
+      - name: Ruff lint
+        run: uv run ruff check app/
+      - name: Mypy type-check
+        run: uv run mypy app/ --ignore-missing-imports
+
+  # ── Build Docker image (API target) ────────────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true                     # pulls classifier.pt via Git LFS
+      - name: Build API image
+        run: docker build --target api -t docclassifier-api .
+
+  # ── Golden‑set test ────────────────────────────────────────────────────────
+  golden:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Run golden.py
+        run: uv run python app/classifier/eval/golden.py
+
+  # ── Full‑stack smoke test ──────────────────────────────────────────────────
+  smoke:
+    runs-on: ubuntu-latest
+    needs: [build, golden]
+    env:
+      VAULT_TOKEN: root
+      DATABASE_URL: postgresql+asyncpg://docclassifier:docclassifier_dev@db:5432/docclassifier
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # 1. Start the full Compose stack
+      - name: Start services
+        run: docker compose up --build --wait --wait-timeout 120
+
+      # 2. Seed admin user
+      - name: Seed admin
+        run: docker compose run --rm api python scripts/seed_admin.py
+
+      # 3. Obtain admin JWT
+      - name: Login as admin
+        id: login
+        run: |
+          TOKEN=$(curl -s -X POST http://localhost:8000/auth/jwt/login \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "username=admin@example.com&password=Admin1234!" \
+            | jq -r '.access_token')
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      # 4. Drop a test TIFF into the SFTP drop zone
+      - name: Copy TIFF to SFTP
+        run: |
+          docker compose exec -T sftp sh -c 'cat > /home/scanner/upload/test.tif' \
+            < app/classifier/eval/golden_images/memo_000103.tif
+
+      # 5. Poll the API for the prediction to appear (max 30 s)
+      - name: Wait for prediction
+        run: |
+          for i in $(seq 1 30); do
+            COUNT=$(curl -s -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+              http://localhost:8000/predictions/recent?limit=10 | jq '. | length')
+            if [ "$COUNT" -gt 0 ]; then
+              echo "Prediction found after $i seconds"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Prediction did not appear within 30 s"
+          exit 1
+
+      # 6. Verify the prediction data
+      - name: Verify prediction
+        run: |
+          PRED=$(curl -s -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            http://localhost:8000/predictions/recent?limit=1)
+          echo "$PRED" | jq '.[0] | {label: .predicted_class, confidence: .confidence}'
+
+      # 7. Tear down
+      - name: Stop services
+        if: always()
+        run: docker compose down --volumes

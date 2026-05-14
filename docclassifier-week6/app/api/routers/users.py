@@ -1,24 +1,14 @@
 # File: app/api/routers/users.py
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi_cache.decorator import cache
 import casbin
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi_cache.decorator import cache
 
-from app.api.deps import (
-    get_enforcer,
-    get_user_service,        # ← domain user
-)
+from app.api.deps import get_enforcer, get_user_service
 from app.api.routers.auth import current_domain_user
 from app.domain.user import User, UserCreate, UserRoleUpdate
-from app.infra.cache import (
-    USERS_LIST_KEY,
-    user_me_key,
-)
-from app.services.exceptions import (
-    LastAdminError,
-    NotFound,
-    PermissionDenied,
-)
+from app.infra.cache import USERS_LIST_KEY, user_me_key
+from app.services.exceptions import LastAdminError, NotFound, PermissionDenied
 from app.services.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -52,8 +42,8 @@ async def get_me(
     key_builder=lambda func, namespace, request, response, *args, **kwargs: USERS_LIST_KEY,
 )
 async def list_users(
-    skip: int = 0,
-    limit: int = 20,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=200),
     actor: User = Depends(current_domain_user),
     svc: UserService = Depends(get_user_service),
     _: None = Depends(_guard_list_users),
@@ -71,11 +61,8 @@ async def create_user(
     svc: UserService = Depends(get_user_service),
     enforcer: casbin.Enforcer = Depends(get_enforcer),
 ):
-    """Admin creates a new user (invite). Password is hashed inside the service."""
-    allowed = enforcer.enforce(actor.role.value, "/users", "POST")
-    if not allowed:
+    if not enforcer.enforce(actor.role.value, "/users", "POST"):
         raise HTTPException(status_code=403, detail="Forbidden")
-
     try:
         return await svc.create_user(data, actor)
     except PermissionDenied:
@@ -90,10 +77,8 @@ async def change_role(
     svc: UserService = Depends(get_user_service),
     enforcer: casbin.Enforcer = Depends(get_enforcer),
 ):
-    allowed = enforcer.enforce(actor.role.value, "/users/role", "PATCH")
-    if not allowed:
+    if not enforcer.enforce(actor.role.value, "/users/role", "PATCH"):
         raise HTTPException(status_code=403, detail="Forbidden")
-
     try:
         return await svc.change_role(user_id, update, actor)
     except PermissionDenied:

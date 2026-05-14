@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "backbone": "convnext_tiny",
+  "weights_enum": "IMAGENET1K_V1",
+  "num_classes": 16,
+  "classes": [
+    "letter",
+    "form",
+    "email",
+    "handwritten",
+    "advertisement",
+    "scientific_report",
+    "scientific_publication",
+    "specification",
+    "file_folder",
+    "news_article",
+    "budget",
+    "invoice",
+    "presentation",
+    "questionnaire",
+    "resume",
+    "memo"
+  ],
+  "image_size": 224,
+  "imagenet_mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "imagenet_std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "temperature": 0.9500000000000004,
+  "sha256": "e8eceef148d36e818f90f2df673515d3dcb3f9b1a2feeab8f59e8b7e02d21bac",
+  "freeze_policy": "linear_probe_then_partial_unfreeze",
+  "probe_epochs": 20,
+  "finetune_epochs": 20,
+  "label_smoothing": 0.1,
+  "metrics": {
+    "test_top1": 0.634667,
+    "test_top5": 0.9,
+    "worst_class": "budget",
+    "worst_class_acc": 0.351351,
+    "per_class_acc": {
+      "letter": 0.5,
+      "form": 0.511628,
+      "email": 0.815789,
+      "handwritten": 0.711111,
+      "advertisement": 0.869565,
+      "scientific_report": 0.490566,
+      "scientific_publication": 0.709091,
+      "specification": 0.755556,
+      "file_folder": 0.947368,
+      "news_article": 0.659574,
+      "budget": 0.351351,
+      "invoice": 0.5,
+      "presentation": 0.622222,
+      "questionnaire": 0.474576,
+      "resume": 0.72973,
+      "memo": 0.490909
+    }
+  },
+  "min_top1_threshold": 0.3,
+  "reviewer_threshold": 0.7,
+  "environment": {
+    "python": "3.12.13",
+    "torch": "2.10.0+cu128",
+    "torchvision": "0.25.0+cu128",
+    "cuda": "12.8",
+    "gpu": "Tesla T4",
+    "seed": 42
+  }
+}

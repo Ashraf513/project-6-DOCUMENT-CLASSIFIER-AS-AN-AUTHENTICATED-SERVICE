@@ -21,10 +21,34 @@ dependencies = [
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
     "pwdlib[argon2]>=0.3.0",
+    "rq>=2.8.0",
+    "minio>=7.2.20",
+    "paramiko>=5.0.0",
+    "hvac>=2.4.0",
+    "casbin-sqlalchemy-adapter>=1.4.0",
+    "torch>=2.12.0",
+    "torchvision>=0.27.0",
+    "psycopg2-binary>=2.9.12",
+    "streamlit>=1.57.0",
+    "python-multipart>=0.0.28",
 ]
 
 [dependency-groups]
 dev = [
+    "mypy>=2.1.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.13",
 ]
+
+# Route torch and torchvision to the CPU-only PyTorch wheel index.
+# This prevents uv from pulling nvidia-cuda-*, nvidia-cublas-*, triton, etc.
+# (~1.5 GB of CUDA libraries that are unused in a CPU-only container).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url  = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch       = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }

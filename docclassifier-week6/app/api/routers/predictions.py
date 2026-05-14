@@ -1,23 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi_cache.decorator import cache
-import casbin
+# File: app/api/routers/predictions.py
 
-from app.api.deps import (
-    get_enforcer,
-    get_prediction_service,
-)
+import casbin
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi_cache.decorator import cache
+
+from app.api.deps import get_enforcer, get_prediction_service
 from app.api.routers.auth import current_domain_user
 from app.domain.prediction import PredictionRelabel
 from app.domain.user import User
-from app.infra.cache import (
-    PREDICTIONS_RECENT_KEY,
-    predictions_batch_key,
-)
-from app.services.exceptions import (
-    NotFound,
-    PermissionDenied,
-    RelabelNotAllowed,
-)
+from app.infra.cache import PREDICTIONS_RECENT_KEY, predictions_batch_key
+from app.services.exceptions import NotFound, PermissionDenied, RelabelNotAllowed
 from app.services.prediction_service import PredictionService
 
 router = APIRouter(prefix="/predictions", tags=["predictions"])
@@ -29,13 +21,12 @@ router = APIRouter(prefix="/predictions", tags=["predictions"])
     key_builder=lambda func, namespace, request, response, *args, **kwargs: PREDICTIONS_RECENT_KEY,
 )
 async def recent_predictions(
-    limit: int = 10,
+    limit: int = Query(default=10, ge=1, le=100),
     actor: User = Depends(current_domain_user),
     svc: PredictionService = Depends(get_prediction_service),
     enforcer: casbin.Enforcer = Depends(get_enforcer),
 ):
-    allowed = enforcer.enforce(actor.role.value, "/predictions/recent", "GET")
-    if not allowed:
+    if not enforcer.enforce(actor.role.value, "/predictions/recent", "GET"):
         raise HTTPException(status_code=403, detail="Forbidden")
     return await svc.get_recent_predictions(limit=limit)
 
@@ -52,8 +43,7 @@ async def predictions_for_batch(
     svc: PredictionService = Depends(get_prediction_service),
     enforcer: casbin.Enforcer = Depends(get_enforcer),
 ):
-    allowed = enforcer.enforce(actor.role.value, "/predictions/batch", "GET")
-    if not allowed:
+    if not enforcer.enforce(actor.role.value, "/predictions/batch", "GET"):
         raise HTTPException(status_code=403, detail="Forbidden")
     return await svc.get_predictions_for_batch(batch_id)
 
@@ -66,10 +56,8 @@ async def relabel_prediction(
     svc: PredictionService = Depends(get_prediction_service),
     enforcer: casbin.Enforcer = Depends(get_enforcer),
 ):
-    allowed = enforcer.enforce(actor.role.value, "/predictions/relabel", "PATCH")
-    if not allowed:
+    if not enforcer.enforce(actor.role.value, "/predictions/relabel", "PATCH"):
         raise HTTPException(status_code=403, detail="Forbidden")
-
     try:
         return await svc.relabel(prediction_id, update, actor)
     except PermissionDenied:
