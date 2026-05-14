@@ -54,7 +54,7 @@ from app.services.exceptions import (
 # Database setup
 # ---------------------------------------------------------------------------
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost:5432/docclassifier_test"
+    "DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost:5432/docclassifier"
 )
 
 engine = create_async_engine(DATABASE_URL, echo=False)   # echo=True to see SQL

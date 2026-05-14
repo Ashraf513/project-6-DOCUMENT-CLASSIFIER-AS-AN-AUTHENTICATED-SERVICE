@@ -44,15 +44,9 @@ class UserService:
         return await self.get_me(user_id)
 
     async def create_user(self, data: UserCreate, actor: User) -> User:
-        """
-        Create a new user. Admin only.
-        The service hashes the password (bcrypt) before persisting.
-        :raises PermissionDenied: if actor is not admin
-        """
         if actor.role != Role.admin:
             raise PermissionDenied("Only admins can create users")
 
-        # Hash here so plain-text password never reaches the repo or DB.
         hashed = hash_password(data.password)
         to_persist = data.model_copy(update={"password": hashed})
 
@@ -65,7 +59,6 @@ class UserService:
                 details={"email": data.email, "role": data.role.value},
             )
 
-        # Invalidate users list cache
         await self.cache.delete(USERS_LIST_KEY)
         return user
 
@@ -75,14 +68,6 @@ class UserService:
         update: UserRoleUpdate,
         actor: User,
     ) -> User:
-        """
-        Change the role of a target user.
-        Only admins can perform this action.
-        If the target is the last admin, the operation is refused.
-        :raises PermissionDenied: if actor is not admin
-        :raises LastAdminError: if demoting the last admin
-        :raises NotFound: if target user does not exist
-        """
         if actor.role != Role.admin:
             raise PermissionDenied("Only admins can change roles")
 
@@ -107,12 +92,16 @@ class UserService:
                 },
             )
 
-        # Invalidate user‑specific caches
         await self.cache.delete(user_me_key(target_user_id))
         await self.cache.delete(USERS_LIST_KEY)
         return updated
 
-    async def list_users(self, actor: User, skip: int = 0, limit: int = 20) -> list[User]:
+    async def list_users(
+        self,
+        actor: User,
+        skip: int = 0,
+        limit: int = 20,
+    ) -> list[User]:
         if actor.role != Role.admin:
             raise PermissionDenied("Only admins can list users")
         async with self.db.begin():

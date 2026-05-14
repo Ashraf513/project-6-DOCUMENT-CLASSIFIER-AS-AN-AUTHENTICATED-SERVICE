@@ -26,7 +26,7 @@ target_metadata = Base.metadata
 # ---------------------------------------------------------------------------
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:password@localhost:5432/docclassifier_test"
+    "postgresql+asyncpg://postgres:password@localhost:5432/docclassifier"
 )
 
 
