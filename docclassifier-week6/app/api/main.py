@@ -1,63 +1,68 @@
-"""
-app/api/main.py
-Creates the FastAPI application, registers all routers, and runs startup checks.
-"""
+# File: app/api/main.py
 
+import os
+from contextlib import asynccontextmanager
+
+import redis.asyncio as redis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
 
 from app.api.routers import auth, users, batches, predictions
+from app.infra.vault import get_secret
+from app.classifier.model import verify_model_integrity
 
 
-def create_app() -> FastAPI:
-    """Factory function that builds and returns the FastAPI app."""
-    app = FastAPI(
-        title="Document Classifier API",
-        description="Authenticated service for browsing document classifications",
-        version="0.1.0",
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Verify classifier before startup
+    verify_model_integrity()
+
+    # Validate Vault access
+    jwt_secret = get_secret("JWT_SECRET")
+    if not jwt_secret:
+        raise RuntimeError("JWT secret missing from Vault")
+
+    # Initialize Redis cache
+    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    redis_client = redis.from_url(redis_url, decode_responses=True)
+
+    FastAPICache.init(
+        RedisBackend(redis_client),
+        prefix="doc-classifier-cache",
     )
 
-    # CORS — allow the Swagger UI and any frontend to call the API
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    yield
 
-    # Register all routers with their URL prefixes
-    app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
-    app.include_router(users.router, prefix="/users", tags=["Users"])
-    app.include_router(batches.router, prefix="/batches", tags=["Batches"])
-    app.include_router(predictions.router, prefix="/predictions", tags=["Predictions"])
-
-    @app.on_event("startup")
-    async def startup():
-        """
-        Startup checks — the app refuses to start if any check fails.
-        These checks are required by the project specification:
-
-        1. Vault must be reachable (load JWT signing key)
-        2. Classifier weights file must exist and SHA-256 must match model card
-        3. Model card's reported test top-1 must be above the threshold
-        4. Casbin policy table must not be empty
-
-        In the current skeleton these are logged but not enforced.
-        Replace the print() calls with real checks once infra is ready.
-        """
-        print("[startup] Vault check: placeholder — load JWT signing key here")
-        print("[startup] Classifier weights check: placeholder — verify SHA-256 here")
-        print("[startup] Casbin policy check: placeholder — verify policy table here")
-        print("[startup] All startup checks passed (skeleton mode)")
-
-    @app.get("/health")
-    async def health_check():
-        """Simple health-check endpoint for docker-compose and CI."""
-        return {"status": "ok"}
-
-    return app
+    await redis_client.close()
 
 
-# Module-level app instance — uvicorn imports this
-app = create_app()
+app = FastAPI(
+    title="Document Classifier API",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Routers
+app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(batches.router)
+app.include_router(predictions.router)
+
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": "document-classifier-api",
+    }
