@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 import uuid
-from sqlalchemy import func, select, update
+from sqlalchemy import delete as sa_delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
 
@@ -76,6 +76,14 @@ class UserRepo:
         result = await self.session.execute(stmt)
         user_orm = result.scalar_one_or_none()
         return User.model_validate(user_orm) if user_orm else None
+
+    async def delete(self, user_id: str) -> bool:
+        """Hard-delete a user (does NOT commit).
+        Uses a raw DELETE so the DB ondelete='SET NULL' on audit_log.actor_id
+        fires correctly — audit history is preserved with actor_id = NULL."""
+        stmt   = sa_delete(UserORM).where(UserORM.id == user_id)
+        result = await self.session.execute(stmt)
+        return (result.rowcount or 0) > 0
 
     async def update_active(self, user_id: str, is_active: bool) -> Optional[User]:
         """Activate/deactivate user (does NOT commit)."""

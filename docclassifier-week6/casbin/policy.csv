@@ -2,6 +2,7 @@
 p, admin, /users, GET
 p, admin, /users, POST
 p, admin, /users/role, PATCH
+p, admin, /users/delete, DELETE
 p, admin, /batches, GET
 p, admin, /batches/detail, GET
 p, admin, /predictions/recent, GET

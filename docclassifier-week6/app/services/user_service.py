@@ -76,6 +76,7 @@ class UserService:
                     raise LastAdminError("Cannot demote the last admin")
 
             updated = await self.user_repo.update_role(target_user_id, update.role)
+            assert updated is not None, "User must exist after update"
             await self.audit_repo.create(
                 actor_id=actor.id,
                 action="role_change",
@@ -89,6 +90,34 @@ class UserService:
         await self.cache.delete(user_me_key(target_user_id))
         await self.cache.delete(USERS_LIST_KEY)
         return updated
+
+    async def delete_user(self, target_user_id: str, actor: User) -> None:
+        if actor.role != Role.admin:
+            raise PermissionDenied("Only admins can delete users")
+
+        if target_user_id == actor.id:
+            raise PermissionDenied("You cannot delete your own account")
+
+        async with self.db.begin():
+            target = await self.user_repo.get_by_id(target_user_id)
+            if not target:
+                raise NotFound("User not found")
+
+            if target.role == Role.admin:
+                admin_count = await self.user_repo.count_by_role(Role.admin)
+                if admin_count == 1:
+                    raise LastAdminError("Cannot delete the last admin account")
+
+            await self.audit_repo.create(
+                actor_id=actor.id,
+                action="user_deleted",
+                target=f"user:{target_user_id}",
+                details={"email": target.email, "role": target.role.value},
+            )
+            await self.user_repo.delete(target_user_id)
+
+        await self.cache.delete(user_me_key(target_user_id))
+        await self.cache.delete(USERS_LIST_KEY)
 
     async def list_users(
         self,

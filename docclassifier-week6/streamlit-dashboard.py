@@ -90,14 +90,33 @@ class DashboardAPIError(RuntimeError):
 # ── Session state ─────────────────────────────────────────────────────────────
 
 def init_state() -> None:
-    for key, value in {
+    defaults = {
         "api_base_url":  DEFAULT_API_URL,
         "access_token":  "",
         "current_user":  None,
         "status_notice": "",
         "demo_relabels": {},
-    }.items():
+        "invite_success": None,
+    }
+    for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+
+    # Try to restore from browser storage via JavaScript
+    if not st.session_state.access_token:
+        st.markdown("""
+        <script>
+        // Try to restore token from localStorage
+        const stored = localStorage.getItem('docclassifier_token');
+        const user = localStorage.getItem('docclassifier_user');
+        if (stored && user) {
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                key: '_restore_login',
+                value: {token: stored, user: JSON.parse(user)}
+            }, '*');
+        }
+        </script>
+        """, unsafe_allow_html=True)
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
@@ -187,6 +206,41 @@ def inject_styles() -> None:
     }
     .tiny-note { font-size: .88rem; color: #64748b; }
     </style>
+
+    <script>
+    // Persist login state to localStorage
+    function saveLoginState(token, user) {
+        localStorage.setItem('docclassifier_token', token);
+        localStorage.setItem('docclassifier_user', JSON.stringify(user));
+    }
+
+    function getLoginState() {
+        const token = localStorage.getItem('docclassifier_token');
+        const user = localStorage.getItem('docclassifier_user');
+        return {
+            token: token,
+            user: user ? JSON.parse(user) : null
+        };
+    }
+
+    function clearLoginState() {
+        localStorage.removeItem('docclassifier_token');
+        localStorage.removeItem('docclassifier_user');
+    }
+
+    // On page load, restore login state if available
+    window.addEventListener('load', function() {
+        const state = getLoginState();
+        if (state.token && state.user) {
+            // Signal to Streamlit that we have saved state
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                key: 'saved_token',
+                value: state.token
+            }, '*');
+        }
+    });
+    </script>
     """, unsafe_allow_html=True)
 
 
@@ -196,30 +250,41 @@ def normalize_base_url(url: str) -> str:
     return url.strip().rstrip("/") or DEFAULT_API_URL
 
 def short_ref(value: Any, length: int = 8) -> str:
-    if value is None: return "-"
+    if value is None:
+        return "-"
     t = str(value)
     return t[:length] if len(t) > length else t
 
 def parse_datetime(value: Any) -> datetime | None:
-    if value is None: return None
-    if isinstance(value, datetime): return value
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
     text = str(value).strip()
-    if not text: return None
-    if text.endswith("Z"): text = text[:-1] + "+00:00"
-    try: return datetime.fromisoformat(text)
-    except ValueError: return None
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 def format_datetime(value: Any) -> str:
     dt = parse_datetime(value)
     return dt.strftime("%b %d %H:%M") if dt else "—"
 
 def confidence_text(value: Any) -> str:
-    try: return f"{float(value)*100:.0f}%"
-    except (TypeError, ValueError): return "—"
+    try:
+        return f"{float(value)*100:.0f}%"
+    except (TypeError, ValueError):
+        return "—"
 
 def confidence_value(value: Any) -> float:
-    try: return float(value)
-    except (TypeError, ValueError): return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 def status_label(value: Any) -> str:
     s = str(value)
@@ -229,17 +294,23 @@ def role_label(value: Any) -> str:
     return ROLE_LABELS.get(str(value), str(value).title())
 
 def review_label(prediction: dict[str, Any]) -> str:
-    if prediction.get("relabeled_class"): return "✅ Corrected"
-    if confidence_value(prediction.get("confidence")) < 0.7: return "⚠️ Needs review"
+    if prediction.get("relabeled_class"):
+        return "✅ Corrected"
+    if confidence_value(prediction.get("confidence")) < 0.7:
+        return "⚠️ Needs review"
     return "🤖 Auto"
 
 def extract_error_message(response: httpx.Response) -> str:
-    try: payload = response.json()
-    except ValueError: payload = None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
     if isinstance(payload, dict):
         detail = payload.get("detail")
-        if isinstance(detail, str): return detail
-        if isinstance(detail, list): return "; ".join(str(i) for i in detail)
+        if isinstance(detail, str):
+            return detail
+        if isinstance(detail, list):
+            return "; ".join(str(i) for i in detail)
     return response.text.strip() or f"HTTP {response.status_code}"
 
 
@@ -266,7 +337,8 @@ def request_json(
         raise DashboardAPIError(extract_error_message(resp))
     if resp.status_code == 204 or not resp.content:
         return None
-    try: return resp.json()
+    try:
+        return resp.json()
     except ValueError as exc:
         raise DashboardAPIError("API returned unreadable data.") from exc
 
@@ -296,26 +368,36 @@ def change_user_role(base_url: str, token: str, user_id: str, role: str) -> dict
         raise DashboardAPIError("Role updated but response was unreadable.")
     return result
 
+def delete_user_api(base_url: str, token: str, user_id: str) -> None:
+    request_json("DELETE", base_url, f"/users/{user_id}", token=token)
+
 
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
 def load_live_dashboard(base_url: str, token: str) -> dict[str, Any]:
     user    = request_json("GET", base_url, "/users/me",           token=token) or {}
-    role    = user.get("role", "")
+    role    = user.get("role", "") if isinstance(user, dict) else ""
     batches = request_json("GET", base_url, "/batches/",           token=token, params={"skip": 0, "limit": 50}) or []
     recent  = request_json("GET", base_url, "/predictions/recent", token=token, params={"limit": 50}) or []
 
     users = []
-    if role == "admin":
+    if role in ("admin",):  # Allow admin role
         try:
-            users = request_json("GET", base_url, "/users/", token=token, params={"skip": 0, "limit": 100}) or []
-        except DashboardAPIError:
-            pass
+            resp = request_json("GET", base_url, "/users/", token=token, params={"skip": 0, "limit": 100})
+            if isinstance(resp, list):
+                users = resp
+            elif isinstance(resp, dict) and "value" in resp:
+                users = resp.get("value", [])
+            else:
+                users = []
+        except DashboardAPIError as e:
+            st.warning(f"Could not load users: {str(e)}")
 
     audit = []
     if role in ("admin", "auditor"):
         try:
-            audit = request_json("GET", base_url, "/audit/", token=token, params={"limit": 200}) or []
+            resp = request_json("GET", base_url, "/audit/", token=token, params={"limit": 200})
+            audit = resp if isinstance(resp, list) else []
         except DashboardAPIError:
             pass
 
@@ -324,8 +406,8 @@ def load_live_dashboard(base_url: str, token: str) -> dict[str, Any]:
         "user":    user,
         "batches": batches if isinstance(batches, list) else [],
         "recent":  recent  if isinstance(recent,  list) else [],
-        "users":   users   if isinstance(users,   list) else [],
-        "audit":   audit   if isinstance(audit,   list) else [],
+        "users":   users if isinstance(users, list) else [],
+        "audit":   audit if isinstance(audit, list) else [],
     }
 
 def load_demo_dashboard() -> dict[str, Any]:
@@ -406,6 +488,10 @@ def render_sidebar() -> None:
             st.session_state.access_token  = ""
             st.session_state.current_user  = None
             st.session_state.status_notice = ""
+            # Clear localStorage
+            st.markdown("""<script>localStorage.removeItem('docclassifier_token');
+                           localStorage.removeItem('docclassifier_user');</script>""",
+                       unsafe_allow_html=True)
             st.rerun()
         return
 
@@ -421,6 +507,12 @@ def render_sidebar() -> None:
                     st.session_state.access_token  = token
                     st.session_state.current_user  = user
                     st.session_state.status_notice = ""
+                    # Save to localStorage
+                    user_json = str(user).replace("'", '"')
+                    st.markdown(f"""<script>
+                        localStorage.setItem('docclassifier_token', {repr(token)});
+                        localStorage.setItem('docclassifier_user', {repr(user_json)});
+                    </script>""", unsafe_allow_html=True)
                     st.rerun()
                 except DashboardAPIError as exc:
                     st.session_state.status_notice = str(exc)
@@ -667,7 +759,6 @@ def render_review_tab(data: dict, token: str | None, base_url: str | None, user:
     c1.metric("Confidence",    confidence_text(confidence))
     c2.metric("Batch",         short_ref(sel.get("batch_id")))
 
-    conf_color = "normal" if confidence >= 0.7 else "inverse"
     st.progress(min(max(confidence, 0.0), 1.0))
     st.caption(f"File: {sel.get('filename','—')}  ·  Uploaded {format_datetime(sel.get('created_at'))}  ·  Batch {sel.get('batch_id','—')}")
 
@@ -709,7 +800,10 @@ def render_users_tab(data: dict, token: str | None, base_url: str | None, actor:
     st.markdown('<div class="section-label">Team</div>', unsafe_allow_html=True)
 
     if not users:
-        st.info("No users found.")
+        if live_mode:
+            st.warning("⚠️ No users loaded from API. Check your admin access or try refreshing.")
+        else:
+            st.info("Sign in to view your team.")
         return
 
     # ── Summary metrics ───────────────────────────────────────────────────────
@@ -752,22 +846,71 @@ def render_users_tab(data: dict, token: str | None, base_url: str | None, actor:
     # ── Invite new user ───────────────────────────────────────────────────────
     st.markdown("#### Invite new user")
     if live_mode and token and base_url:
-        with st.form("invite_form"):
-            inv_email    = st.text_input("Email address")
-            inv_password = st.text_input("Temporary password", type="password")
-            inv_role     = st.selectbox("Role", ["reviewer", "auditor"])
+        with st.form("invite_form", clear_on_submit=True):
+            inv_email    = st.text_input("Email address", key="inv_email_input")
+            inv_password = st.text_input("Temporary password", type="password", key="inv_pass_input")
+            inv_role     = st.selectbox("Role", ["reviewer", "auditor"], key="inv_role_select")
             if st.form_submit_button("Create account", use_container_width=True, type="primary"):
                 if not inv_email.strip() or not inv_password:
                     st.error("Email and password are required.")
                 else:
                     try:
                         invite_user(base_url, token, inv_email.strip(), inv_password, inv_role)
-                        st.success(f"✅ Account created for **{inv_email.strip()}** as {role_label(inv_role)}.")
+                        st.session_state.invite_success = f"✅ Account created for **{inv_email.strip()}** as {role_label(inv_role)}."
                         st.rerun()
                     except DashboardAPIError as exc:
                         st.error(str(exc))
+        if st.session_state.get("invite_success"):
+            st.success(st.session_state.invite_success)
+            st.session_state.invite_success = None
     else:
         st.info("Sign in as admin to invite users.")
+
+    # ── Delete user ───────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Delete user")
+    st.caption("Permanently removes the account. Audit log entries are preserved with the actor shown as 'System'.")
+
+    deletable = [u for u in users if u.get("id") != actor.get("id")]
+    if not deletable:
+        st.caption("No other users to delete.")
+    elif live_mode and token and base_url:
+        del_opts    = {f"{u.get('email')} ({role_label(u.get('role'))})": u for u in deletable}
+        del_target  = st.selectbox("Select user to delete", list(del_opts.keys()), key="del_user_select")
+        target_info = del_opts[del_target]
+
+        st.markdown(
+            f"""
+            <div class="soft-card" style="border-left: 3px solid #ef4444;">
+                <div class="tiny-note">You are about to permanently delete:</div>
+                <strong>{target_info.get('email')}</strong>
+                &nbsp;·&nbsp; {role_label(target_info.get('role'))}
+                &nbsp;·&nbsp; joined {format_datetime(target_info.get('created_at'))}
+                <div class="tiny-note" style="margin-top:.4rem; color:#ef4444;">
+                    This action cannot be undone.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        confirmed = st.checkbox("I understand this is permanent and want to delete this account")
+
+        if st.button(
+            "🗑️ Delete user",
+            disabled=not confirmed,
+            type="primary",
+            use_container_width=True,
+            key="del_user_btn",
+        ):
+            try:
+                delete_user_api(base_url, token, target_info["id"])
+                st.success(f"✅ Account **{target_info.get('email')}** has been deleted.")
+                st.rerun()
+            except DashboardAPIError as exc:
+                st.error(str(exc))
+    else:
+        st.info("Sign in as admin to delete users.")
 
 
 # ── Audit tab (admin + auditor) ───────────────────────────────────────────────

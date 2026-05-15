@@ -2,37 +2,53 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, services-amer]
   pull_request:
     branches: [main]
 
 jobs:
 
-  # ── Lint & type-check (fast feedback) ──────────────────────────────────────
+  # ── Lint & type-check (fast feedback) ────────────────────────────────────────
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
+
       - run: uv sync --group dev
+
       - name: Ruff lint
-        run: uv run ruff check app/
+        # Include streamlit-dashboard.py — it lives at the repo root, not in app/
+        run: uv run ruff check app/ streamlit-dashboard.py
+
       - name: Mypy type-check
         run: uv run mypy app/ --ignore-missing-imports
 
-  # ── Build Docker image (API target) ────────────────────────────────────────
+  # ── Build Docker image (API target) ──────────────────────────────────────────
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true                     # pulls classifier.pt via Git LFS
-      - name: Build API image
-        run: docker build --target api -t docclassifier-api .
+          lfs: true
 
-  # ── Golden‑set test ────────────────────────────────────────────────────────
+      # Buildx is needed for GHA layer caching (type=gha)
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: api
+          load: true                  # make image available to local docker daemon
+          tags: docclassifier-api:ci
+          cache-from: type=gha        # reuse layers from previous runs
+          cache-to:   type=gha,mode=max
+
+  # ── Golden-set regression test ────────────────────────────────────────────────
   golden:
     runs-on: ubuntu-latest
     needs: build
@@ -40,72 +56,127 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true
+
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
+
       - run: uv sync
-      - name: Run golden.py
+
+      - name: Run golden-set test
         run: uv run python app/classifier/eval/golden.py
 
-  # ── Full‑stack smoke test ──────────────────────────────────────────────────
+  # ── Full-stack smoke test ─────────────────────────────────────────────────────
   smoke:
     runs-on: ubuntu-latest
     needs: [build, golden]
     env:
       VAULT_TOKEN: root
-      DATABASE_URL: postgresql+asyncpg://docclassifier:docclassifier_dev@db:5432/docclassifier
+
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      # 1. Start the full Compose stack
-      - name: Start services
-        run: docker compose up --build --wait --wait-timeout 120
+      - uses: docker/setup-buildx-action@v3
 
-      # 2. Seed admin user
+      # Pull cached layers so compose --build is fast
+      - name: Prime Docker layer cache
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: api
+          load: true
+          tags: docclassifier-api:ci
+          cache-from: type=gha
+
+      # 1. Start only the core services — dashboard and pgadmin are UI tools
+      #    that are not required for the smoke signal and make the stack slower.
+      #    docker compose resolves the full depends_on graph automatically, so
+      #    listing api + worker + sftp-ingest is enough to boot everything needed.
+      - name: Start core services
+        run: |
+          docker compose up --build --wait --wait-timeout 180 \
+            api worker sftp-ingest
+        timeout-minutes: 5
+
+      # 2. Seed the first admin user.
+      #    IMPORTANT: the api service declares ENTRYPOINT ["uvicorn", ...] so
+      #    extra arguments are passed to uvicorn, not executed as a new command.
+      #    --entrypoint python overrides the entrypoint and runs the script directly.
       - name: Seed admin
-        run: docker compose run --rm api python scripts/seed_admin.py
+        run: |
+          docker compose run --rm --no-TTY \
+            --entrypoint python \
+            api scripts/seed_admin.py
 
-      # 3. Obtain admin JWT
+      # 3. Obtain admin JWT and validate it is a real token (not "null")
       - name: Login as admin
         id: login
         run: |
-          TOKEN=$(curl -s -X POST http://localhost:8000/auth/jwt/login \
+          RESPONSE=$(curl -sf -X POST http://localhost:8000/auth/jwt/login \
             -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "username=admin@example.com&password=Admin1234!" \
-            | jq -r '.access_token')
+            -d "username=admin@example.com&password=Admin1234!")
+          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Login failed — response: $RESPONSE"
+            exit 1
+          fi
+          echo "Admin JWT acquired"
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
-      # 4. Drop a test TIFF into the SFTP drop zone
-      - name: Copy TIFF to SFTP
+      # 4. Drop a real TIFF from the golden set into the SFTP drop zone.
+      #    -T disables TTY allocation (required in non-interactive CI).
+      - name: Drop TIFF into SFTP
         run: |
-          docker compose exec -T sftp sh -c 'cat > /home/scanner/upload/test.tif' \
+          docker compose exec -T sftp sh -c \
+            'cat > /home/scanner/upload/smoke_test.tif' \
             < app/classifier/eval/golden_images/memo_000103.tif
 
-      # 5. Poll the API for the prediction to appear (max 30 s)
+      # 5. Poll /predictions/recent until one prediction appears (max 30 s).
+      #    On timeout, dump worker + sftp-ingest logs to help diagnose failures.
       - name: Wait for prediction
         run: |
           for i in $(seq 1 30); do
-            COUNT=$(curl -s -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
-              http://localhost:8000/predictions/recent?limit=10 | jq '. | length')
-            if [ "$COUNT" -gt 0 ]; then
-              echo "Prediction found after $i seconds"
+            COUNT=$(curl -sf \
+              -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+              "http://localhost:8000/predictions/recent?limit=10" \
+              | jq 'length')
+            if [ "${COUNT:-0}" -gt 0 ]; then
+              echo "Prediction appeared after ${i}s"
               exit 0
             fi
             sleep 1
           done
-          echo "Prediction did not appear within 30 s"
+          echo "No prediction within 30s — service logs:"
+          docker compose logs worker      --tail=40
+          docker compose logs sftp-ingest --tail=20
           exit 1
 
-      # 6. Verify the prediction data
-      - name: Verify prediction
+      # 6. Assert the prediction has all required fields and non-empty values.
+      - name: Assert prediction shape
         run: |
-          PRED=$(curl -s -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
-            http://localhost:8000/predictions/recent?limit=1)
-          echo "$PRED" | jq '.[0] | {label: .predicted_class, confidence: .confidence}'
+          PRED=$(curl -sf \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            "http://localhost:8000/predictions/recent?limit=1")
 
-      # 7. Tear down
+          echo "Prediction: $(echo "$PRED" | jq '.[0] | {label:.predicted_class, confidence:.confidence, batch:.batch_id}')"
+
+          echo "$PRED" | jq -e '(.[0].predicted_class | length) > 0' \
+            || { echo "FAIL: predicted_class is empty or missing"; exit 1; }
+
+          echo "$PRED" | jq -e '.[0].confidence > 0' \
+            || { echo "FAIL: confidence is 0 or missing"; exit 1; }
+
+          echo "$PRED" | jq -e '(.[0].batch_id | length) > 0' \
+            || { echo "FAIL: batch_id is empty or missing"; exit 1; }
+
+          echo "$PRED" | jq -e '(.[0].overlay_key | length) > 0' \
+            || { echo "FAIL: overlay_key missing — worker may not have uploaded the overlay"; exit 1; }
+
+          echo "All assertions passed"
+
+      # 7. Tear down (always runs, even when a prior step fails)
       - name: Stop services
         if: always()
         run: docker compose down --volumes
