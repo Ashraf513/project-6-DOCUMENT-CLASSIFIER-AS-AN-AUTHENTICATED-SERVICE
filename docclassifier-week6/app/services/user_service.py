@@ -76,6 +76,7 @@ class UserService:
                     raise LastAdminError("Cannot demote the last admin")
 
             updated = await self.user_repo.update_role(target_user_id, update.role)
+            assert updated is not None, "User must exist after update"
             await self.audit_repo.create(
                 actor_id=actor.id,
                 action="role_change",

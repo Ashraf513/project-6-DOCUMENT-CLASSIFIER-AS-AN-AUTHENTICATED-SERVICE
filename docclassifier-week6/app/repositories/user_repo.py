@@ -83,7 +83,7 @@ class UserRepo:
         fires correctly — audit history is preserved with actor_id = NULL."""
         stmt   = sa_delete(UserORM).where(UserORM.id == user_id)
         result = await self.session.execute(stmt)
-        return result.rowcount > 0
+        return (result.rowcount or 0) > 0
 
     async def update_active(self, user_id: str, is_active: bool) -> Optional[User]:
         """Activate/deactivate user (does NOT commit)."""
