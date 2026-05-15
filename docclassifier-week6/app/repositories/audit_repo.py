@@ -49,7 +49,7 @@ class AuditRepo:
             .order_by(AuditLogORM.timestamp.desc())
             .limit(limit)
         )
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     async def get_by_action(self, action: str, limit: int = 100) -> List[AuditLogORM]:
         result = await self.session.execute(
@@ -58,7 +58,7 @@ class AuditRepo:
             .order_by(AuditLogORM.timestamp.desc())
             .limit(limit)
         )
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     async def get_by_target(self, target: str, limit: int = 100) -> List[AuditLogORM]:
         result = await self.session.execute(
@@ -67,7 +67,7 @@ class AuditRepo:
             .order_by(AuditLogORM.timestamp.desc())
             .limit(limit)
         )
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     async def list_recent(self, limit: int = 100) -> List[AuditLogEntry]:
         result = await self.session.execute(

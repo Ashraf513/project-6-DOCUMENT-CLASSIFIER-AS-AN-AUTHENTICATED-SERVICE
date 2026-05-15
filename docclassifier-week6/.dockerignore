@@ -1,13 +1,71 @@
-.git
-.venv
+# =============================================================================
+# .dockerignore — controls what enters the Docker build context.
+#
+# Rule: if it doesn't need to be in the image, exclude it here.
+# Smaller context = faster builds, no accidental secret leaks.
+# =============================================================================
+
+# ── Version control ──────────────────────────────────────────────────────────
+.git/
+.gitattributes
+.gitignore
+
+# ── Local environment — NEVER in an image ────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python artefacts (regenerated inside the image by uv) ────────────────────
+.venv/
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
-.env
-docclassifier.egg-info/
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Test artefacts ────────────────────────────────────────────────────────────
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+test_*.py
+*_test.py
+
+# ── Type-checking / linting caches ───────────────────────────────────────────
 .mypy_cache/
 .ruff_cache/
-.streamlit/cache/
-*.sqlite
+.pytype/
+
+# ── IDE / editor state ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── uv local cache (not needed in image; deps installed at build time) ────────
+.uv/
+
+# ── Documentation (not needed at runtime) ────────────────────────────────────
+*.md
+!app/**/README.md
+
+# ── CI / GitHub Actions (not needed in image) ────────────────────────────────
+.github/
+
+# ── Temporary / debug files ───────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+sql_logs.txt
+hello.txt
+
+# ── Large eval images that don't belong in the API/worker images ──────────────
+# (golden images are only needed for the golden-set CI test, not at runtime)
+app/classifier/eval/golden_images/

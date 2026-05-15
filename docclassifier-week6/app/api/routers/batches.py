@@ -1,20 +1,15 @@
 # File: app/api/routers/batches.py
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi_cache.decorator import cache
 import casbin
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi_cache.decorator import cache
 
-from app.api.deps import (
-    get_batch_service,
-    get_enforcer,
-)
+from app.api.deps import get_batch_service, get_enforcer
 from app.api.routers.auth import current_domain_user
 from app.domain.user import User
-from app.infra.cache import (
-    BATCHES_LIST_KEY,
-    batch_key,
-)
+from app.infra.cache import BATCHES_LIST_KEY, batch_key
 from app.services.batch_service import BatchService
+from app.services.exceptions import NotFound
 
 router = APIRouter(prefix="/batches", tags=["batches"])
 
@@ -25,14 +20,13 @@ router = APIRouter(prefix="/batches", tags=["batches"])
     key_builder=lambda func, namespace, request, response, *args, **kwargs: BATCHES_LIST_KEY,
 )
 async def list_batches(
-    skip: int = 0,
-    limit: int = 20,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=200),
     actor: User = Depends(current_domain_user),
     svc: BatchService = Depends(get_batch_service),
     enforcer: casbin.Enforcer = Depends(get_enforcer),
 ):
-    allowed = enforcer.enforce(actor.role.value, "/batches", "GET")
-    if not allowed:
+    if not enforcer.enforce(actor.role.value, "/batches", "GET"):
         raise HTTPException(status_code=403, detail="Forbidden")
     return await svc.list_batches(skip=skip, limit=limit)
 
@@ -49,8 +43,9 @@ async def get_batch(
     svc: BatchService = Depends(get_batch_service),
     enforcer: casbin.Enforcer = Depends(get_enforcer),
 ):
-    # Use generic path "/batches/detail" for Casbin enforcement
-    allowed = enforcer.enforce(actor.role.value, "/batches/detail", "GET")
-    if not allowed:
+    if not enforcer.enforce(actor.role.value, "/batches/detail", "GET"):
         raise HTTPException(status_code=403, detail="Forbidden")
-    return await svc.get_batch(batch_id)
+    try:
+        return await svc.get_batch(batch_id)
+    except NotFound:
+        raise HTTPException(status_code=404, detail="Batch not found")

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from app.domain.prediction import Prediction\")",
+      "Bash(uv run *)",
+      "PowerShell(Get-ChildItem -Path \"g:\\\\project-6-DOCUMENT-CLASSIFIER-AS-AN-AUTHENTICATED-SERVICE\\\\docclassifier-week6\" -Exclude \".venv\" -Recurse | Where-Object {$_.Extension -eq \".py\" -or $_.PSIsContainer} | Select-Object FullName | Sort-Object FullName)",
+      "PowerShell(Get-ChildItem -Path \"G:\\\\project-6-DOCUMENT-CLASSIFIER-AS-AN-AUTHENTICATED-SERVICE\\\\docclassifier-week6\\\\app\" | Where-Object {$_.Extension -eq \".py\"} | Select-Object Name)",
+      "Bash(docker compose *)"
+    ]
+  }
+}

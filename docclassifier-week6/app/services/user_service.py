@@ -1,27 +1,20 @@
 # Location: app/services/user_service.py
 # Business logic: user creation, role changes, profile.
-# All methods are async. They own transaction boundaries and cache invalidation.
+# All methods own transaction boundaries and cache invalidation.
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.domain.user import User, Role, UserCreate, UserRoleUpdate
 from app.repositories.user_repo import UserRepo
 from app.repositories.audit_repo import AuditRepo
-from app.infra.cache import (
-    CacheInvalidator,
-    USERS_LIST_KEY,
-    user_me_key,
-)
+from app.infra.cache import CacheInvalidator, USERS_LIST_KEY, user_me_key
 from app.infra.security import hash_password
-from app.services.exceptions import (
-    PermissionDenied,
-    NotFound,
-    LastAdminError,
-)
+from app.services.exceptions import PermissionDenied, NotFound, LastAdminError
 
 
 class UserService:
     """
-    Handles user‑related business logic.
+    Handles user-related business logic.
     - Only admins can create / change roles.
     - The last admin cannot be demoted.
     - Role changes are audited and cached data is invalidated.
@@ -30,7 +23,7 @@ class UserService:
     def __init__(self, db: AsyncSession, cache: CacheInvalidator):
         self.db = db
         self.cache = cache
-        self.user_repo = UserRepo(db)
+        self.user_repo  = UserRepo(db)
         self.audit_repo = AuditRepo(db)
 
     async def get_me(self, user_id: str) -> User:
@@ -47,6 +40,7 @@ class UserService:
         if actor.role != Role.admin:
             raise PermissionDenied("Only admins can create users")
 
+        # Hash the plain-text password, then replace it in the domain model
         hashed = hash_password(data.password)
         to_persist = data.model_copy(update={"password": hashed})
 
@@ -82,6 +76,7 @@ class UserService:
                     raise LastAdminError("Cannot demote the last admin")
 
             updated = await self.user_repo.update_role(target_user_id, update.role)
+            assert updated is not None, "User must exist after update"
             await self.audit_repo.create(
                 actor_id=actor.id,
                 action="role_change",
@@ -95,6 +90,34 @@ class UserService:
         await self.cache.delete(user_me_key(target_user_id))
         await self.cache.delete(USERS_LIST_KEY)
         return updated
+
+    async def delete_user(self, target_user_id: str, actor: User) -> None:
+        if actor.role != Role.admin:
+            raise PermissionDenied("Only admins can delete users")
+
+        if target_user_id == actor.id:
+            raise PermissionDenied("You cannot delete your own account")
+
+        async with self.db.begin():
+            target = await self.user_repo.get_by_id(target_user_id)
+            if not target:
+                raise NotFound("User not found")
+
+            if target.role == Role.admin:
+                admin_count = await self.user_repo.count_by_role(Role.admin)
+                if admin_count == 1:
+                    raise LastAdminError("Cannot delete the last admin account")
+
+            await self.audit_repo.create(
+                actor_id=actor.id,
+                action="user_deleted",
+                target=f"user:{target_user_id}",
+                details={"email": target.email, "role": target.role.value},
+            )
+            await self.user_repo.delete(target_user_id)
+
+        await self.cache.delete(user_me_key(target_user_id))
+        await self.cache.delete(USERS_LIST_KEY)
 
     async def list_users(
         self,
