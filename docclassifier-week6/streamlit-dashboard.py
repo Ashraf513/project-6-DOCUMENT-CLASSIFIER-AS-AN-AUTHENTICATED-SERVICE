@@ -250,30 +250,41 @@ def normalize_base_url(url: str) -> str:
     return url.strip().rstrip("/") or DEFAULT_API_URL
 
 def short_ref(value: Any, length: int = 8) -> str:
-    if value is None: return "-"
+    if value is None:
+        return "-"
     t = str(value)
     return t[:length] if len(t) > length else t
 
 def parse_datetime(value: Any) -> datetime | None:
-    if value is None: return None
-    if isinstance(value, datetime): return value
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
     text = str(value).strip()
-    if not text: return None
-    if text.endswith("Z"): text = text[:-1] + "+00:00"
-    try: return datetime.fromisoformat(text)
-    except ValueError: return None
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 def format_datetime(value: Any) -> str:
     dt = parse_datetime(value)
     return dt.strftime("%b %d %H:%M") if dt else "—"
 
 def confidence_text(value: Any) -> str:
-    try: return f"{float(value)*100:.0f}%"
-    except (TypeError, ValueError): return "—"
+    try:
+        return f"{float(value)*100:.0f}%"
+    except (TypeError, ValueError):
+        return "—"
 
 def confidence_value(value: Any) -> float:
-    try: return float(value)
-    except (TypeError, ValueError): return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 def status_label(value: Any) -> str:
     s = str(value)
@@ -283,17 +294,23 @@ def role_label(value: Any) -> str:
     return ROLE_LABELS.get(str(value), str(value).title())
 
 def review_label(prediction: dict[str, Any]) -> str:
-    if prediction.get("relabeled_class"): return "✅ Corrected"
-    if confidence_value(prediction.get("confidence")) < 0.7: return "⚠️ Needs review"
+    if prediction.get("relabeled_class"):
+        return "✅ Corrected"
+    if confidence_value(prediction.get("confidence")) < 0.7:
+        return "⚠️ Needs review"
     return "🤖 Auto"
 
 def extract_error_message(response: httpx.Response) -> str:
-    try: payload = response.json()
-    except ValueError: payload = None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
     if isinstance(payload, dict):
         detail = payload.get("detail")
-        if isinstance(detail, str): return detail
-        if isinstance(detail, list): return "; ".join(str(i) for i in detail)
+        if isinstance(detail, str):
+            return detail
+        if isinstance(detail, list):
+            return "; ".join(str(i) for i in detail)
     return response.text.strip() or f"HTTP {response.status_code}"
 
 
@@ -320,7 +337,8 @@ def request_json(
         raise DashboardAPIError(extract_error_message(resp))
     if resp.status_code == 204 or not resp.content:
         return None
-    try: return resp.json()
+    try:
+        return resp.json()
     except ValueError as exc:
         raise DashboardAPIError("API returned unreadable data.") from exc
 
@@ -741,7 +759,6 @@ def render_review_tab(data: dict, token: str | None, base_url: str | None, user:
     c1.metric("Confidence",    confidence_text(confidence))
     c2.metric("Batch",         short_ref(sel.get("batch_id")))
 
-    conf_color = "normal" if confidence >= 0.7 else "inverse"
     st.progress(min(max(confidence, 0.0), 1.0))
     st.caption(f"File: {sel.get('filename','—')}  ·  Uploaded {format_datetime(sel.get('created_at'))}  ·  Batch {sel.get('batch_id','—')}")
 

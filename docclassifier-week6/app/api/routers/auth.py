@@ -14,7 +14,7 @@ from fastapi_users.db import SQLAlchemyUserDatabase
 
 from app.db.models import User as UserORM
 from app.db.session import engine
-from app.domain.user import UserRead, UserCreate, User as DomainUser
+from app.domain.user import User as DomainUser
 from app.infra.vault import get_secret
 
 # fastapi-users needs its own session maker with autobegin=True

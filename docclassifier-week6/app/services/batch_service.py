@@ -13,7 +13,6 @@ from app.infra.cache import (
     batch_key,
 )
 from app.services.exceptions import (
-    PermissionDenied,
     NotFound,
     InvalidStateTransition,
 )
