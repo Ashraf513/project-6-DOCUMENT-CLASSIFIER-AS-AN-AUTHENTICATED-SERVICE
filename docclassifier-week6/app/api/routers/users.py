@@ -8,6 +8,7 @@ from app.api.deps import get_enforcer, get_user_service
 from app.api.routers.auth import current_domain_user
 from app.domain.user import User, UserCreate, UserRoleUpdate
 from app.infra.cache import USERS_LIST_KEY, user_me_key
+from fastapi import Response
 from app.services.exceptions import LastAdminError, NotFound, PermissionDenied
 from app.services.user_service import UserService
 
@@ -87,3 +88,23 @@ async def change_role(
         raise HTTPException(status_code=404, detail="User not found")
     except LastAdminError:
         raise HTTPException(status_code=400, detail="Cannot demote the last admin")
+
+
+@router.delete("/{user_id}", status_code=204)
+async def delete_user(
+    user_id: str,
+    actor: User = Depends(current_domain_user),
+    svc: UserService = Depends(get_user_service),
+    enforcer: casbin.Enforcer = Depends(get_enforcer),
+):
+    if not enforcer.enforce(actor.role.value, "/users/delete", "DELETE"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        await svc.delete_user(user_id, actor)
+        return Response(status_code=204)
+    except PermissionDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except NotFound:
+        raise HTTPException(status_code=404, detail="User not found")
+    except LastAdminError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
