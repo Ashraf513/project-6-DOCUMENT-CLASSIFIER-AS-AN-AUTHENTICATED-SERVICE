@@ -118,6 +118,31 @@ docker-compose up
 #    http://localhost:8000/docs   (interactive Swagger UI)
 ```
 
+## Run With Docker
+
+```bash
+cd docclassifier-week6
+cp .env.example .env
+docker compose up --build
+```
+
+When the stack is up:
+- API docs: `http://localhost:8000/docs`
+- Dashboard: `http://localhost:8501`
+
+The compose file starts PostgreSQL, Redis, the migration job, the API, and the Streamlit dashboard. The worker scaffolds are still placeholders in the codebase, so they are not started yet.
+
+## Simple Dashboard
+
+This branch adds a Streamlit dashboard.
+
+```bash
+cd docclassifier-week6
+streamlit run streamlit_dashboard.py
+```
+
+Use the sidebar to sign in with your API account. If the API is not ready yet, the page still shows a demo layout so you can keep working on the interface.
+
 ---
 
 ## Three User Roles
